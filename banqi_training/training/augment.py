@@ -1,7 +1,7 @@
-"""banqi/training/augment.py — 空间对称数据增强（Rust 绑定执行）。
+"""banqi/training/augment.py — 空间对称数据增强。
 
 把 episode dict 的 board 特征重排、policy / action_mask 按动作置换表 gather、
-动作索引置换，全部下沉到 Rust（banqi_4x8），Python 侧只做调度与缓存。
+动作索引置换（banqi_training.symmetry 纯 Python 实现，置换表带缓存）。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import random
 from typing import Dict, List
 
 from banqi_training.constants import build_constants
-from banqi_training.rust_bridge import (
+from banqi_training.symmetry import (
     get_action_symmetry_table,
     transform_action,
     transform_board,

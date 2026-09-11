@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover
     SystemMonitor = None  # type: ignore[assignment,misc]
 
 from banqi_training.config import Config
-from banqi_training.rust_bridge import variant_dims
+from banqi_training.constants import build_constants
 from banqi_training.tb_logger import add_hparams, add_text
 from banqi_training.variant import Variant
 
@@ -197,24 +197,6 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
     add_hparams({k: str(v) for k, v in hparams.items()}, {})
 
 
-_const_dims_cache: Dict = {}
-
-
 def build_const(variant, name: str) -> int:
-    """从 Rust 统一 `variant_dims(variant_id)` API 取变体维度。
-
-    替代按 env_const_prefix 拼接 `GAME4X4_*` 等模块级常量名（后者已不作为 Python 侧
-    维度来源）。结果按变体缓存。
-    """
-    vid = variant.id
-    if vid not in _const_dims_cache:
-        _const_dims_cache[vid] = dict(variant_dims(vid))
-    dims = _const_dims_cache[vid]
-    key = {
-        "BOARD_ROWS": "board_rows",
-        "BOARD_COLS": "board_cols",
-        "BOARD_CHANNELS": "board_channels",
-        "SCALAR_FEATURE_COUNT": "scalar_feature_count",
-        "ACTION_SPACE_SIZE": "action_space_size",
-    }[name]
-    return int(dims[key])
+    """从 Python 侧 build_constants(variant) 取变体维度（variant 唯一声明源）。"""
+    return int(getattr(build_constants(variant), name))

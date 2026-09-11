@@ -8,6 +8,3 @@ psutil
 tensorboard
 nvidia-ml-py
 tqdm
-
-# Rust PyO3 扩展（变体维度 / 对称增强），由 rust_4x8 经 maturin 构建安装：
-#   cd rust_4x8 && maturin develop --features pyo3

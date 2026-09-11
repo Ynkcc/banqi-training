@@ -91,44 +91,10 @@ def build_constants(variant: Variant) -> Constants:
     return _cache[variant.id]
 
 
-def verify_against_bindings(variant: Variant) -> Dict[str, int]:
-    """（可选）与已编译的 banqi_4x8 绑定核对维度一致性，返回 {字段名: 绑定值}。
-
-    经 Rust 统一 `variant_dims(variant_id)` API 核对，不再按 env_const_prefix 拼接
-    `GAME4X4_*` 等模块级常量名（后者已不作为 Python 侧维度来源）。
-
-    找不到绑定（未 maturin develop）或 variant_dims 不可用时返回空 dict 并静默跳过；
-    找到但值不一致时抛 AssertionError —— 用于在训练/增强前拦截 Rust/Python 维度脱节。
-    """
-    try:
-        from banqi_training.rust_bridge import variant_dims
-        dims = variant_dims(variant.id)
-    except Exception:
-        return {}
-    if not isinstance(dims, dict) or not dims:
-        return {}
-    c = build_constants(variant)
-    expected = {
-        "board_rows": c.BOARD_ROWS,
-        "board_cols": c.BOARD_COLS,
-        "board_channels": c.BOARD_CHANNELS,
-        "scalar_feature_count": c.SCALAR_FEATURE_COUNT,
-        "action_space_size": c.ACTION_SPACE_SIZE,
-    }
-    bound: Dict[str, int] = {}
-    for name, val in expected.items():
-        got = dims.get(name)
-        if got is not None:
-            bound[name] = got
-            assert got == val, f"{name}: Python 派生 {val} != Rust 绑定 {got}"
-    return bound
-
-
 if __name__ == "__main__":
     from banqi_training.variant import VARIANTS
     for vid, v in VARIANTS.items():
         c = build_constants(v)
-        verify_against_bindings(v)
         print(f"[banqi_training.constants] {vid}: ch={c.TOTAL_INPUT_CHANNELS} "
               f"scalar={c.SCALAR_FEATURE_COUNT} action={c.ACTION_SPACE_SIZE} "
               f"pieces={c.TOTAL_PIECES_PER_PLAYER} health={c.INITIAL_HEALTH}")

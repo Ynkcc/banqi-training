@@ -28,7 +28,6 @@ from .losses import run_training_epochs, _resolve_device
 from .lr_schedule import compute_lr_scale, is_stopped, make_cosine_clamp_scheduler
 from .eval import (
     build_fixed_eval,
-    eval_match,
     eval_policy_accuracy,
     eval_value_drift,
     prefill_from_archive,
@@ -66,7 +65,7 @@ class TrainWorker(threading.Thread):
         self.device = device or _resolve_device(cfg.TRAIN_DEVICE)
         # 血量差异价值头开关：开启时使用独立 _health 模型文件，与标准模型物理隔离。
         self.health_enabled = bool(cfg.HEALTH_VALUE_HEAD_ENABLED)
-        # 空间对称增强（Rust 绑定执行，动作置换表带缓存）
+        # 空间对称增强（纯 Python，动作置换表带缓存）
         self.augmenter = EpisodeAugmenter(variant, cfg)
         os.makedirs(self.ckpt_dir, exist_ok=True)
 
@@ -94,7 +93,6 @@ class TrainWorker(threading.Thread):
         self._warmup_done = False
         self._raw_sample_pool: List[Dict] = []
         self._fixed_eval: Optional[Dict] = None
-        self._prev_weights: Optional[Dict[str, torch.Tensor]] = None
         self._init_model_and_checkpoint()
 
     @classmethod
@@ -217,7 +215,7 @@ class TrainWorker(threading.Thread):
         return os.path.join(self.ckpt_dir, "last.pt")
 
     def _onnx_path(self) -> str:
-        """ONNX 模型导出路径（供 run_native_match 免 GIL 推理）。"""
+        """ONNX 模型导出路径（供调度器 worker / gatekeeper 下载使用）。"""
         if self.health_enabled:
             return (self.cfg.HEALTH_ONNX_PATH or
                     os.path.join(self.ckpt_dir, "last_health.onnx"))
@@ -368,7 +366,6 @@ class TrainWorker(threading.Thread):
         )
         pending_samples = 0   # 累积待训练的新样本数
         pending_round = 0     # 累积期间最新的 round_idx
-        last_eval_round = -1  # 上次对战评估的 round_idx（round_idx 间隔不均匀，按间隔门控而非取模）
         while not is_stopped(self.stop_event):
             try:
                 episode_dict = self.data_queue.get(timeout=2.0)
@@ -378,7 +375,7 @@ class TrainWorker(threading.Thread):
                 break
 
             t0 = time.time()
-            # 空间对称增强（动作置换表由 Rust 导出）；关闭时原样返回
+            # 空间对称增强（关闭时原样返回）
             episode_dicts = self._maybe_augment(episode_dict)
             samples: List[Dict] = []
             for ed in episode_dicts:
@@ -488,37 +485,9 @@ class TrainWorker(threading.Thread):
                 elif cfg.VALUE_TARGET_MODE == "mixed":
                     add_scalar("train/value_game_weight", cfg.VALUE_MIX_GAME_WEIGHT, step)
 
-                # 固定验证集评估（价值漂移与策略命中率）
                 eval_value_drift(self.model, self.device, self._fixed_eval, step, tag, round_idx)
                 eval_policy_accuracy(self.model, self.device, self._fixed_eval, step, tag, round_idx)
-
-                # 周期性对战评估（round_idx 间隔不均匀，用间隔门控避免评估点被跳过）
-                eval_match_rounds = cfg.EVAL_MATCH_ROUNDS
-                if eval_match_rounds > 0 and (round_idx - last_eval_round) >= eval_match_rounds:
-                    last_eval_round = round_idx
-                    match_win_rates = eval_match(
-                        self.model, self.device, self.variant, cfg,
-                        self._prev_weights, round_idx, tag
-                    )
-                    stop_wr = cfg.EVAL_MATCH_STOP_WIN_RATE
-                    stop_opp = cfg.EVAL_MATCH_STOP_OPPONENT
-                    if stop_wr > 0:
-                        for _opp, _wr in match_win_rates.items():
-                            if stop_opp and _opp != stop_opp:
-                                continue
-                            if _wr >= stop_wr:
-                                print(
-                                    f"[TR-{self.variant.id}] 🏁 vs {_opp} 胜率 "
-                                    f"{_wr:.1%} ≥ {stop_wr:.0%}，达标停止训练"
-                                )
-                                self.stop_event.set()
-                                break
-
-                # 缓存本轮权重快照（供下一轮 vs prev 对战评估）
-                self._prev_weights = {
-                    k: v.detach().to("cpu").clone()
-                    for k, v in self.model.state_dict().items()
-                }
+                # 对战评估已移交调度器 gatekeeper rating（candidate vs best + GSPRT）
 
             self.save_checkpoint(new_samples=new_samples, total_samples=total_samples,
                                  round_idx=round_idx)
