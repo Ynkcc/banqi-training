@@ -1,88 +1,36 @@
-"""banqi/actions.py — 动作表构建（Rust build_action_lookup_tables 的 Python 镜像）
+"""banqi_training/actions.py — 动作表 / 动作计数的兼容入口。
 
-src/game_env/actions.rs::build_action_lookup_tables 的唯一镜像实现：
-  1. 翻棋：action == 格子序号
-  2. 常规移动：四方向（上/下/左/右）各 1 步
-  3. 炮击：同行/同列隔子（|距离| > 1），已存在表中则跳过
+动作序与动作计数的**唯一真源**在 `banqi_training.symmetry`
+（`build_action_lookup_tables` / `compute_action_counts`，与 banqi-core
+`core::env::actions.rs` / `core::env::config.rs` 同序）。
 
-动作顺序必须与 Rust 逐条一致 —— data_augmentation 的动作置换表、
-constants 的动作空间计数都依赖它。任何修改需与 Rust 侧同步并跑自检。
+本模块仅做转发，不再保留独立实现，避免两份「Rust 镜像」各自漂移。
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Tuple
 
+from banqi_training.symmetry import build_action_lookup_tables, compute_action_counts
 
-def build_action_tables(
-    rows: int, cols: int
-) -> Tuple[List[Tuple[int, ...]], Dict[Tuple[int, ...], int]]:
-    """返回 (action_to_coords, coords_to_action)，顺序与 Rust 完全一致。"""
-    total_positions = rows * cols
-    action_to_coords: List[Tuple[int, ...]] = []
-    coords_to_action: Dict[Tuple[int, ...], int] = {}
-    idx = 0
-
-    # 1. 翻棋：action == sq
-    for sq in range(total_positions):
-        coords = (sq,)
-        action_to_coords.append(coords)
-        coords_to_action[coords] = idx
-        idx += 1
-
-    # 2. 常规移动：四方向各 1 步（顺序：上/下/左/右，与 Rust 一致）
-    moves = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-    for r1 in range(rows):
-        for c1 in range(cols):
-            from_sq = r1 * cols + c1
-            for dr, dc in moves:
-                r2, c2 = r1 + dr, c1 + dc
-                if 0 <= r2 < rows and 0 <= c2 < cols:
-                    coords = (from_sq, r2 * cols + c2)
-                    action_to_coords.append(coords)
-                    coords_to_action[coords] = idx
-                    idx += 1
-
-    # 3. 炮击：同行隔子（水平）+ 同列隔子（垂直），已在表中的对跳过
-    for r1 in range(rows):
-        for c1 in range(cols):
-            from_sq = r1 * cols + c1
-            # 水平
-            for c2 in range(cols):
-                if abs(c1 - c2) > 1:
-                    coords = (from_sq, r1 * cols + c2)
-                    if coords not in coords_to_action:
-                        action_to_coords.append(coords)
-                        coords_to_action[coords] = idx
-                        idx += 1
-            # 垂直
-            for r2 in range(rows):
-                if abs(r1 - r2) > 1:
-                    coords = (from_sq, r2 * cols + c1)
-                    if coords not in coords_to_action:
-                        action_to_coords.append(coords)
-                        coords_to_action[coords] = idx
-                        idx += 1
-
-    return action_to_coords, coords_to_action
-
-
-def _is_adjacent(coords: Tuple[int, ...], cols: int) -> bool:
-    """两格坐标（from_sq, to_sq）是否相邻（四方向各 1 步）。"""
-    f, t = coords
-    r1, c1 = divmod(f, cols)
-    r2, c2 = divmod(t, cols)
-    return abs(r1 - r2) + abs(c1 - c2) == 1
+# 兼容旧名：原 build_action_tables 与 symmetry.build_action_lookup_tables 语义、返回值一致。
+build_action_tables = build_action_lookup_tables
 
 
 def count_actions(rows: int, cols: int) -> Tuple[int, int, int, int]:
-    """返回 (n_reveal, n_move, n_cannon, n_total)，由动作表推导。"""
-    action_to_coords, _ = build_action_tables(rows, cols)
-    n_reveal = sum(1 for c in action_to_coords if len(c) == 1)
-    n_move = sum(1 for c in action_to_coords if len(c) == 2 and _is_adjacent(c, cols))
-    n_total = len(action_to_coords)
-    n_cannon = n_total - n_reveal - n_move
-    return n_reveal, n_move, n_cannon, n_total
+    """返回 (n_reveal, n_move, n_cannon, n_total)。
+
+    计数取自 `compute_action_counts`（Rust const fn 的镜像），总数取自动作表长度，
+    两者不一致即说明 Python 侧动作表与计数推导已漂移，直接失败。
+    """
+    action_to_coords, _ = build_action_lookup_tables(rows, cols)
+    reveal, regular, cannon = compute_action_counts(rows, cols)
+    total = len(action_to_coords)
+    if total != reveal + regular + cannon:
+        raise AssertionError(
+            f"{rows}x{cols}: 动作表长度 {total} != 计数之和 {reveal + regular + cannon}"
+        )
+    return reveal, regular, cannon, total
 
 
 if __name__ == "__main__":
