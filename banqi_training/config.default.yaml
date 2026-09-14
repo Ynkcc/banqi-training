@@ -62,7 +62,7 @@ common:
   train:
     WEIGHT_DECAY: 1.0e-4          # 权重衰减
     EMA_ENABLED: true             # 是否启用权重指数滑动平均 (EMA)
-    EMA_DECAY: 0.999              # EMA 滑动衰减率
+    EMA_DECAY: 0.99               # EMA 滑动衰减率
     DATA_AUGMENT_ENABLED: true    # 是否启用数据增强
     DATA_AUGMENT_KEEP_ORIGINAL: true  # 是否保留原始样本
     RECENT_SAMPLE_ENABLED: true   # 批量聚焦训练时启用「新近优先」采样
@@ -96,7 +96,7 @@ common:
     COLLECTION: "games"
     ARCHIVE_BATCH: 32
     ARCHIVE_POLL_INTERVAL: 1.0
-    ARCHIVE_ENABLED: true
+    ARCHIVE_ENABLED: false
     ARCHIVE_PREFILL_DIR: ""
     ARCHIVE_PREFILL_GAMES: 0      # 预填充对局数默认 0
 
@@ -262,20 +262,20 @@ common:
 4x2:
   self_play:
     PREDICT_BATCH: 64
-    MCTS_SIMS: 64
+    MCTS_SIMS: 256
     MAX_CONSIDERED_ACTIONS: 16
-    NUM_WORKERS: 4
-    GAMES_PER_WORKER: 15
+    NUM_WORKERS: 1
+    GAMES_PER_WORKER: 2
     BATCH_CONCURRENCY: 16
 
   train:
-    TRAIN_BATCH: 32
-    LEARNING_RATE: 7.0e-5
+    TRAIN_BATCH: 128
+    LEARNING_RATE: 1.0e-4
     MIN_LR: 1.0e-5
-    LR_DECAY_STEPS: 6000
-    TRAIN_EPOCHS_PER_ROUND: 3
-    MAX_SAMPLE_BUFFER_SIZE: 8000
-    MIN_SAMPLES_TO_START: 256
+    LR_DECAY_STEPS: 40000
+    TRAIN_EPOCHS_PER_ROUND: 2
+    MAX_SAMPLE_BUFFER_SIZE: 20000
+    MIN_SAMPLES_TO_START: 2000
 
   data_augment:
     DATA_AUGMENT_TRANSFORMS: "hflip,vflip,rot180"
