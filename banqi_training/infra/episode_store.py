@@ -11,7 +11,6 @@ import gzip
 import io
 import json
 import os
-import re
 import time
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Protocol
 
@@ -32,7 +31,7 @@ class SchedulerEpisodeStore:
     """分布式实现：经 Go scheduler 拉取 worker 直传的 episode 批次。
 
     R2 凭据只在调度器持有：本类调 gRPC ListEpisodes 获取预签名 GET 列表
-    （游标分页，object_key 字典序），再经 HTTP 下载解析。对象键布局
+    （游标分页，服务端按 episode 登记顺序推进），再经 HTTP 下载解析。对象键布局
     `episodes/<network_sha>/<data_id>.jsonl.gz`。trainer 零存储配置，
     仅需 SCHEDULER_ENDPOINT。
     """
@@ -50,7 +49,7 @@ class SchedulerEpisodeStore:
         # grpc.insecure_channel 只接受 host:port，不接受 URL scheme 前缀
         target = self.endpoint.split("://", 1)[-1]
         self._stub = scheduler_pb2_grpc.SchedulerServiceStub(grpc.insecure_channel(target))
-        self._cursor: str = ""  # object_key 游标（字典序），已取尽该键
+        self._cursor: str = ""  # object_key 游标：服务端据此定位登记顺序，该键已消费
         self._pending: List[str] = []  # 已列出未下载的 (key, url)
 
     # ---- 写入端（trainer 不产 episode，占位实现满足 Protocol） ----
@@ -66,7 +65,7 @@ class SchedulerEpisodeStore:
         )
         for obj in reply.objects:
             self._pending.append((obj.object_key, obj.download_url))
-        # 服务端按 object_key 字典序递增返回，始终推进游标防止重复取页
+        # 服务端按登记顺序递增返回，始终推进游标防止重复取页
         if reply.objects:
             self._cursor = reply.objects[-1].object_key
 
@@ -83,21 +82,13 @@ class SchedulerEpisodeStore:
             if not self._pending:
                 return
             key, url = self._pending.pop(0)
-            name = key.rsplit("/", 1)[-1]
-            iter_m = re.search(r"iter(\d+)", name)
-            round_idx = int(iter_m.group(1)) if iter_m else 0
-            worker_m = re.search(r"_w([0-9a-f\-]+)", name)
-            worker_id = worker_m.group(1) if worker_m else 0
             try:
                 body = self._download(url)
                 with gzip.open(io.BytesIO(body), "rt", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:
-                            ep = json.loads(line)
-                            ep.setdefault("round_idx", round_idx)
-                            ep.setdefault("worker_id", worker_id)
-                            yield ep
+                            yield json.loads(line)
             except Exception as exc:
                 print(f"[EpisodeStore] ⚠️ 跳过损坏对象 {key}: {exc}")
 

@@ -16,3 +16,6 @@ venv/
 
 # OS
 .DS_Store
+banqi_training/config.local.yaml
+
+outputs/

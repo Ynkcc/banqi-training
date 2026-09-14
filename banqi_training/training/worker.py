@@ -214,8 +214,12 @@ class TrainWorker(threading.Thread):
                     os.path.join(self.ckpt_dir, "last_health.pt"))
         return os.path.join(self.ckpt_dir, "last.pt")
 
-    def _onnx_path(self) -> str:
-        """ONNX 模型导出路径（供调度器 worker / gatekeeper 下载使用）。"""
+    def onnx_path(self) -> str:
+        """ONNX 模型导出路径（供调度器 worker / gatekeeper 下载使用）。
+
+        公开方法：分布式 runner 的 RegistryPublisher 必须监听与训练侧实际写出
+        完全一致的路径（启用血量头时是 last_health.onnx）。
+        """
         if self.health_enabled:
             return (self.cfg.HEALTH_ONNX_PATH or
                     os.path.join(self.ckpt_dir, "last_health.onnx"))
@@ -232,7 +236,7 @@ class TrainWorker(threading.Thread):
         这里在模型初始化后立即导出一次初始权重，打破该循环依赖。
         """
         pt_path = self._pt_path()
-        onnx_path = self._onnx_path()
+        onnx_path = self.onnx_path()
         if os.path.exists(pt_path):
             return
         try:
@@ -268,7 +272,7 @@ class TrainWorker(threading.Thread):
         export_every = max(int(self.cfg.CKPT_EXPORT_EVERY), 1)
 
         pt_path = self._pt_path()
-        onnx_path = self._onnx_path()
+        onnx_path = self.onnx_path()
 
         should_save_ckpt = force or (round_idx % save_every == 0) or (round_idx == 0)
         # round_idx==0 时仅在 pt 不存在时导出一次；round_idx>0 才按周期导出，
@@ -353,7 +357,6 @@ class TrainWorker(threading.Thread):
 
     def run(self, rounds: int = 100000):
         cfg = self.cfg
-        last_processed_round = 0
         version = self.version
         total_samples = self.start_total_samples
         # 批量训练：自对弈数据逐局到达，单局样本量远小于一个合理训练批次。
@@ -365,7 +368,10 @@ class TrainWorker(threading.Thread):
             cfg.TRAIN_BATCH * cfg.TRAIN_EPOCHS_PER_ROUND, capacity_base // 4
         )
         pending_samples = 0   # 累积待训练的新样本数
-        pending_round = 0     # 累积期间最新的 round_idx
+        # 训练轮次由 trainer 自己维护并单调递增：分布式形态下 episode 不携带轮次，
+        # 轮次恒为 0 会让 save_checkpoint 的 should_export 恒为假（训练期永不导出
+        # onnx），闭环因此拿不到新网络。
+        round_idx = 0
         while not is_stopped(self.stop_event):
             try:
                 episode_dict = self.data_queue.get(timeout=2.0)
@@ -385,26 +391,22 @@ class TrainWorker(threading.Thread):
             new_samples = len(samples)
             total_samples += new_samples
             pending_samples += new_samples
-            round_idx = episode_dict.get("round_idx", last_processed_round)
-            pending_round = max(pending_round, round_idx)
 
             min_samples = cfg.MIN_SAMPLES_TO_START
             if len(self.buffer) < min_samples:
                 print(f"[TR-{self.variant.id}] 等待足够样本进行训练: "
                       f"{len(self.buffer)}/{min_samples}")
-                self._maybe_save_early(episode_dict)
-                last_processed_round = round_idx
+                self._maybe_save_early(round_idx)
                 continue
 
             # ---- 批量训练门控：累积够新样本才训练，避免单局碎片化训练 ----
             if pending_samples < batch_train_min_samples:
-                last_processed_round = round_idx
                 continue
 
             # 本次训练消化 pending_samples 这一批新样本；selfplay 与 rule_selfplay 统一
             new_samples = pending_samples
             pending_samples = 0
-            round_idx = pending_round
+            round_idx += 1
             self._anneal_value_weight(round_idx)
 
             # ---- 训练量限制：与累积新增样本量匹配，避免旧数据反复训练 ----
@@ -491,22 +493,20 @@ class TrainWorker(threading.Thread):
 
             self.save_checkpoint(new_samples=new_samples, total_samples=total_samples,
                                  round_idx=round_idx)
-            last_processed_round = round_idx
             version += 1
             self.version = version
             # 周期内存维护：强制 GC + glibc arena 归还（防 RSS 线性增长）
             self._maintain_memory()
 
-            if last_processed_round >= rounds - 1:
+            if round_idx >= rounds - 1:
                 print(f"[TR-{self.variant.id}] 达到训练轮数上限 {rounds}，退出训练 worker")
                 break
 
 
-    def _maybe_save_early(self, episode_dict):
+    def _maybe_save_early(self, round_idx):
         # 预热阶段（样本不足）也定期保存，避免长期无 checkpoint
-        if (episode_dict.get("round_idx", 0) % 10 == 0) and not os.path.exists(
-                self.last_ckpt_path()):
-            self.save_checkpoint(round_idx=episode_dict.get("round_idx", 0))
+        if round_idx % 10 == 0 and not os.path.exists(self.last_ckpt_path()):
+            self.save_checkpoint(round_idx=round_idx)
 
     def _maintain_memory(self, force: bool = False) -> None:
         """周期内存维护：手动 GC + 堆内存空闲页释放。"""

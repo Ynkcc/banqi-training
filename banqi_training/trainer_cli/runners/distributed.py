@@ -27,16 +27,12 @@ from banqi_training.variant import get_variant
 from .context import CountingQueue, log_meta_tb, setup_variant_logging
 
 
-def _default_onnx_of(config: Config) -> str:
-    onnx_path = getattr(config, "ONNX_PATH", "") or ""
-    if onnx_path:
-        return onnx_path
-    base, _ = os.path.splitext(config.MODEL_PATH)
-    return base + ".onnx"
-
-
 class RegistryPublisher(threading.Thread):
-    """watch Trainer 导出的 onnx 文件，变更即 publish 到 Registry。"""
+    """watch Trainer 导出的 onnx 文件，出现或变更即 publish 到 Registry。
+
+    首次观测到的文件同样发布：冷启动时 TrainWorker 已导出初始模型，若不发布
+    则调度器永远没有 best 网络，整条闭环无法启动。
+    """
 
     def __init__(self, registry: ModelRegistry, model_path: str, stop: threading.Event,
                  tag: str) -> None:
@@ -53,9 +49,8 @@ class RegistryPublisher(threading.Thread):
             try:
                 mtime = os.path.getmtime(self.model_path)
                 if mtime != last_mtime and os.path.getsize(self.model_path) > 0:
-                    if last_mtime is not None:  # 首次观测不重复发布
-                        self.registry.publish(self.model_path)
-                        self.published += 1
+                    self.registry.publish(self.model_path)
+                    self.published += 1
                     last_mtime = mtime
             except FileNotFoundError:
                 pass
@@ -86,7 +81,11 @@ def run_distributed(variant_id: str) -> None:
     registry = SchedulerModelRegistry()
     counting_q = CountingQueue(store)
 
-    onnx_path = _default_onnx_of(config)
+    thread_stop = threading.Event()
+    # 先构造 TrainWorker（构造期导出冷启动初始模型），再让 publisher 监听它实际
+    # 写出的 onnx 路径：启用血量头时是 last_health.onnx，与 config.ONNX_PATH 不同。
+    train_worker = TrainWorker(variant, config, counting_q, thread_stop)
+    onnx_path = train_worker.onnx_path()
     sep = "=" * 56
     print(sep)
     print(f"  🚀 分布式 Trainer 启动（变体 {variant_id}，无 Collector）")
@@ -94,8 +93,6 @@ def run_distributed(variant_id: str) -> None:
     print(f"  SCHEDULER      = {registry.endpoint}（SignNetworkUpload + RegisterNetwork）")
     print(f"  WATCH ONNX     = {onnx_path}")
     print(sep)
-
-    thread_stop = threading.Event()
 
     def _handler(signum, frame):
         if thread_stop.is_set():
@@ -108,7 +105,6 @@ def run_distributed(variant_id: str) -> None:
     publisher = RegistryPublisher(registry, onnx_path, thread_stop, tag)
     publisher.start()
 
-    train_worker = TrainWorker(variant, config, counting_q, thread_stop)
     train_worker.start()
 
     start_t = time.time()

@@ -162,7 +162,8 @@ common:
 
   # ---------------- 训练模式分流 ----------------
   train_mode:
-    TRAIN_MODE: "selfplay"        # selfplay | archive | rule_selfplay    ARCHIVE_TRAIN_DIR: ""
+    TRAIN_MODE: "selfplay"        # selfplay | archive | rule_selfplay
+    ARCHIVE_TRAIN_DIR: ""
     ARCHIVE_TRAIN_GAMES: 0
     ARCHIVE_TRAIN_ROUNDS: 100
     rule_selfplay:
