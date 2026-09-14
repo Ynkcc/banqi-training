@@ -12,6 +12,7 @@ import io
 import json
 import os
 import time
+from collections import deque
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Protocol
 
 
@@ -51,6 +52,10 @@ class SchedulerEpisodeStore:
         self._stub = scheduler_pb2_grpc.SchedulerServiceStub(grpc.insecure_channel(target))
         self._cursor: str = ""  # object_key 游标：服务端据此定位登记顺序，该键已消费
         self._pending: List[str] = []  # 已列出未下载的 (key, url)
+        # 已下载对象的解析结果缓存：一个对象含多局 episode，调用方逐个消费
+        # （get() 只取首项），必须缓存未消费的余项，否则对象键已出队、
+        # 余下对局会被静默丢弃。
+        self._buffered: deque = deque()
 
     # ---- 写入端（trainer 不产 episode，占位实现满足 Protocol） ----
 
@@ -77,6 +82,8 @@ class SchedulerEpisodeStore:
 
     def iter_new_episodes(self) -> Iterator[Dict[str, Any]]:
         while True:
+            while self._buffered:
+                yield self._buffered.popleft()
             if not self._pending:
                 self._list_page()
             if not self._pending:
@@ -88,7 +95,7 @@ class SchedulerEpisodeStore:
                     for line in f:
                         line = line.strip()
                         if line:
-                            yield json.loads(line)
+                            self._buffered.append(json.loads(line))
             except Exception as exc:
                 print(f"[EpisodeStore] ⚠️ 跳过损坏对象 {key}: {exc}")
 
@@ -119,4 +126,4 @@ class SchedulerEpisodeStore:
             self._list_page()
             if len(self._pending) == before:  # 服务端已取尽
                 break
-        return len(self._pending)
+        return len(self._pending) + len(self._buffered)
