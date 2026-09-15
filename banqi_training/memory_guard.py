@@ -7,7 +7,7 @@
 
 一旦超限，直接 os._exit(1) 紧急终止，避免长时间卡死浪费算力 / 拖垮整机。
 
-依赖（requirements.txt）：psutil>=5.9.0
+依赖（pyproject.toml）：psutil>=5.9.0
 
 用法：
     from banqi_training.memory_guard import start_memory_guard

@@ -16,7 +16,7 @@ banqi/system_monitor.py — 训练过程系统资源监控（psutil + pynvml）
   - GPU  : 每张卡利用率 / 显存占用 / 温度 / 功耗（pynvml，无驱动时自动降级跳过）
   - CSV  : --csv 将每次采样落盘，便于事后绘图分析
 
-依赖（requirements.txt）：
+依赖（pyproject.toml）：
     psutil>=5.9.0
     nvidia-ml-py>=12.0.0   # import 名仍是 pynvml（兼容旧 pynvml 包）
 """

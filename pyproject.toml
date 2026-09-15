@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "banqi-training"
+version = "0.1.0"
+description = "Banqi 分布式训练器（被 banqi-scheduler 调度）"
+requires-python = ">=3.10"
+# torch 不在默认依赖内：目标机（GPU 容器）的 CUDA 版 torch 由其自身保障，
+# 从 PyPI 安装会覆盖既有安装。需要时用 pip install "banqi-training[torch]"。
+dependencies = [
+    "numpy",
+    "pyyaml",
+    "grpcio",
+    "protobuf",
+    "psutil",
+    "tensorboard",
+    "nvidia-ml-py",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+proto = ["grpcio-tools"]
+
+[tool.setuptools.packages.find]
+include = ["banqi_training*"]
+
+[tool.setuptools.package-data]
+banqi_training = ["config.default.yaml"]

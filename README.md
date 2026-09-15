@@ -11,11 +11,21 @@ Banqi 分布式训练器（从 `rust_4x8/python` 抽取，仅保留分布式形�
 
 自对弈 worker（banqi-collector）独立部署，不在本仓库范围内。
 
+## 安装
+
+wheel 的构建与分发见 [`../deploy/training/`](../deploy/training)：
+
+```bash
+deploy/training/build.sh                  # 构建 wheel
+deploy/training/deploy.sh --host <目标机>  # 分发并安装
+```
+
+开发机本地安装：`pip install -e .`（非 torch 依赖）；需要 torch 时 `pip install -e ".[torch]"`。
+
 ## 启动
 
 ```bash
-pip install -r requirements.txt
-
+export BANQI_CONFIG=/path/to/config.yaml      # 不设置则读包目录内的 config.local.yaml
 export SCHEDULER_ENDPOINT=http://<scheduler>:50051
 python -m banqi_training.trainer_cli 4x8
 ```

@@ -10,7 +10,7 @@
     add_scalar("train/loss", 0.12, step=100)             # 任意线程（线程安全）
     close_summary_writer()                               # 结束时
 
-依赖：tensorboard（requirements.txt 已有）。未安装或初始化失败时，
+依赖：tensorboard（pyproject.toml 已有）。未安装或初始化失败时，
 所有调用自动降级为 no-op，不影响训练。
 """
 
