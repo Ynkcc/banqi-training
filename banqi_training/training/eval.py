@@ -71,6 +71,12 @@ def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
                 [s.get("game_result_value", 0.0) for s in samples],
                 dtype=np.float32,
             ),
+            # 终局归一化子力差：value target 改用 game_hp 时 corr(终局) 会自然下降，
+            # 需以本项为基准判断价值头是否真的学到了子力信息（见 eval_value_drift）。
+            "health_diffs": np.array(
+                [float(s.get("health_diff", 0.0)) for s in samples],
+                dtype=np.float32,
+            ),
             "masks": masks,
             "teacher_actions": np.array(
                 [
@@ -166,6 +172,15 @@ def eval_value_drift(
             if len(pred) > 2 and np.std(pred) > 1e-6 and np.std(gr) > 1e-6
             else 0.0
         )
+        # 子力差基准：value target 改用 game_hp 后 corr(终局) 会自然下降，
+        # 本项用于区分「目标语义改变」与「价值头退化」。
+        hp = fixed_eval.get("health_diffs")
+        corr_hp = (
+            float(np.corrcoef(pred, hp)[0, 1])
+            if hp is not None and len(pred) > 2
+            and np.std(pred) > 1e-6 and np.std(hp) > 1e-6
+            else 0.0
+        )
         sep = (
             float(pred[gr > 0].mean() - pred[gr < 0].mean())
             if (np.any(gr > 0) and np.any(gr < 0))
@@ -173,11 +188,13 @@ def eval_value_drift(
         )
         print(
             f"{tag} 📊 价值漂移 Round#{round_num}: pred_mean={pred.mean():+.3f} "
-            f"std={pred.std():.3f} corr(终局)={corr:.3f} 胜负区分度={sep:.3f}"
+            f"std={pred.std():.3f} corr(终局)={corr:.3f} corr(子力差)={corr_hp:.3f} "
+            f"胜负区分度={sep:.3f}"
         )
         add_scalar("value_drift/pred_mean", pred.mean(), global_step)
         add_scalar("value_drift/pred_std", pred.std(), global_step)
         add_scalar("value_drift/corr_result", corr, global_step)
+        add_scalar("value_drift/corr_health_diff", corr_hp, global_step)
         add_scalar("value_drift/sep", sep, global_step)
     except Exception as e:
         print(f"{tag} ⚠️ 价值漂移评估失败 ({e})")

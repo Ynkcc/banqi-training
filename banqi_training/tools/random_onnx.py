@@ -6,7 +6,7 @@
 
 用法：
   python -m banqi_training.tools.random_onnx
-  python -m banqi_training.tools.random_onnx --seed 1 --no-health
+  python -m banqi_training.tools.random_onnx --seed 1 --health
   python -m banqi_training.tools.random_onnx --variant 4x4 --out /tmp/4x4_random.onnx
 """
 
@@ -68,10 +68,10 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=0, help="随机初始化种子（默认 0）")
     parser.add_argument(
-        "--no-health",
+        "--health",
         dest="enable_health",
-        action="store_false",
-        help="不导出血量差异第三头（默认导出，与 4x2 训练配置的 HEALTH_VALUE_HEAD_ENABLED 一致）",
+        action="store_true",
+        help="导出血量差异第三头（默认不导出，与训练配置 HEALTH_VALUE_HEAD_ENABLED 默认关闭一致）",
     )
     args = parser.parse_args()
 

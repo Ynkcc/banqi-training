@@ -73,6 +73,12 @@ class DataBuffer:
         self.capacity = max(int(capacity), 1)
         self.variant = variant
         self.cfg = cfg
+        # value 目标模式白名单：拼写错误会静默退化为 mcts，实验结论随之失真
+        modes = {"mcts", "game", "mixed", "anneal", "game_hp"}
+        if cfg.VALUE_TARGET_MODE not in modes:
+            raise ValueError(
+                f"未知 VALUE_TARGET_MODE={cfg.VALUE_TARGET_MODE!r}，可选 {sorted(modes)}"
+            )
         self.C = build_constants(variant)
         self.capacity = max(self.capacity, self.C.TRAIN_BATCH
                             if hasattr(self.C, "TRAIN_BATCH") else 32)
@@ -96,19 +102,30 @@ class DataBuffer:
         self.value_result_weight = 0.0
         # 累计丢弃的异常样本数（NaN/Inf/非法策略），供 TB 数据质量监控
         self.total_dropped = 0
+        # B6 信号强度统计：平局样本占比与平局样本的子力差幅度。用于判断
+        # 「平局标签改用子力差」的收益上限（若平局子力差恒为 0 则该改造无信息）。
+        self._sig_total = 0
+        self._sig_draw = 0
+        self._sig_draw_hp_abs = 0.0
+        self._sig_draw_hp_nonzero = 0
 
     def _target_value(self, s: Dict) -> float:
         """按 value 目标模式计算训练 target：
-          mcts  -> mcts_value（搜索/教师平滑评估，噪声小）
-          game  -> game_result_value（AlphaZero 标准，终局真值 ±1）
-          mixed -> (1-λ)*mcts_value + λ*game_result，λ = VALUE_MIX_GAME_WEIGHT
-          anneal-> (1-w)*mcts_value + w*game_result，w 按轮退火
+          mcts   -> mcts_value（搜索/教师平滑评估，噪声小）
+          game   -> game_result_value（AlphaZero 标准，终局真值 ±1）
+          mixed  -> (1-λ)*mcts_value + λ*game_result，λ = VALUE_MIX_GAME_WEIGHT
+          anneal -> (1-w)*mcts_value + w*game_result，w 按轮退火
+          game_hp-> 胜负用 game_result 真值，平局改用终局子力差（见 _draw_hp_target）。
+                    4x2 平局占比过半，平局样本的价值目标原为常数 0（不提供梯度信息）。
         """
         mode = self.cfg.VALUE_TARGET_MODE
         mv = s.get('mcts_value', 0.0)
         gr = s.get('game_result_value', 0.0)
         if mode == "game":
             return float(gr)
+        if mode == "game_hp":
+            gr = float(gr)
+            return gr if gr != 0.0 else self._draw_hp_target(s.get('health_diff', 0.0))
         if mode == "mixed":
             lam = self.cfg.VALUE_MIX_GAME_WEIGHT
             return (1.0 - lam) * float(mv) + lam * float(gr)
@@ -116,6 +133,16 @@ class DataBuffer:
             w = self.value_result_weight
             return (1.0 - w) * float(mv) + w * float(gr)
         return float(mv)  # mcts（默认）
+
+    def _draw_hp_target(self, health_diff: float) -> float:
+        """平局样本的价值目标：终局子力差 / INITIAL_HEALTH ∈ [-1, 1]。
+
+        尺度必须与胜负样本的 ±1 同量纲：value head 的输出会被 MCTS 当作叶节点
+        初始 V，尺度不一致会扭曲搜索先验。health_diff 为归一化值，经
+        `Constants.health_diff_int` 精确反推整型子力差（无量化误差）。
+        """
+        d = self.C.health_diff_int(float(health_diff))
+        return max(-1.0, min(1.0, d / float(self.C.INITIAL_HEALTH)))
 
     def add_samples(self, samples: List[Dict]) -> None:
         C = self.C
@@ -169,12 +196,41 @@ class DataBuffer:
             if self._size < self.capacity:
                 self._size += 1
 
+            # B6 信号统计：仅统计成功入队的有效样本
+            self._sig_total += 1
+            if float(s.get('game_result_value', 0.0)) == 0.0:
+                self._sig_draw += 1
+                hp_abs = abs(health_norm)
+                self._sig_draw_hp_abs += hp_abs
+                if hp_abs > 1e-9:
+                    self._sig_draw_hp_nonzero += 1
+
         if dropped:
             self.total_dropped += dropped
             print(
                 f"[TR-{self.variant.id}] ⚠️ DataBuffer 丢弃 {dropped} 个异常样本"
                 f"（累计 {self.total_dropped}，NaN/Inf/非法策略），Blocked 来自自对弈或冷存储"
             )
+
+    def take_signal_stats(self) -> Dict[str, float]:
+        """取走并重置样本信号统计（平局占比 / 平局子力差幅度），供 TB 与日志消费。
+
+        仅统计通过入队校验的有效样本。``game_hp`` 目标的收益上限由
+        ``draw_hp_abs_mean`` / ``draw_hp_nonzero_ratio`` 直接反映（全 0 即无信息）。
+        """
+        total = max(self._sig_total, 1)
+        draws = self._sig_draw
+        stats = {
+            "n_samples": float(self._sig_total),
+            "draw_ratio": draws / total,
+            "draw_hp_abs_mean": (self._sig_draw_hp_abs / draws) if draws else 0.0,
+            "draw_hp_nonzero_ratio": (self._sig_draw_hp_nonzero / draws) if draws else 0.0,
+        }
+        self._sig_total = 0
+        self._sig_draw = 0
+        self._sig_draw_hp_abs = 0.0
+        self._sig_draw_hp_nonzero = 0
+        return stats
 
     def __len__(self) -> int:
         return self._size

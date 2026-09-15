@@ -482,6 +482,19 @@ class TrainWorker(threading.Thread):
                 add_scalar("train/lr", current_lr, step)
                 add_scalar("train/buffer_size", len(self.buffer), step)
                 add_scalar("queue/backlog", self._safe_qsize(), step)
+                # B6 观测：平局样本占比与平局样本子力差幅度（决定目标改造的收益上限）
+                sig = self.buffer.take_signal_stats()
+                if sig["n_samples"] > 0:
+                    add_scalar("data/draw_sample_ratio", sig["draw_ratio"], step)
+                    add_scalar("data/draw_hp_abs_mean", sig["draw_hp_abs_mean"], step)
+                    add_scalar("data/draw_hp_nonzero_ratio", sig["draw_hp_nonzero_ratio"], step)
+                    if cfg.VALUE_TARGET_MODE == "game_hp" or round_idx % 10 == 0:
+                        print(
+                            f"[TR-{self.variant.id}] 📈 样本信号: 平局占比={sig['draw_ratio']:.3f} "
+                            f"平局|子力差|均值={sig['draw_hp_abs_mean']:.3f} "
+                            f"非零占比={sig['draw_hp_nonzero_ratio']:.3f} "
+                            f"（{int(sig['n_samples'])} 样本）"
+                        )
                 if cfg.VALUE_TARGET_MODE == "anneal":
                     add_scalar("train/value_anneal_w", self.buffer.value_result_weight, step)
                 elif cfg.VALUE_TARGET_MODE == "mixed":

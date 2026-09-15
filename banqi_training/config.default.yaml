@@ -111,7 +111,8 @@ common:
 
   # ---------------- 价值目标与漂移评估 ----------------
   value_target:
-    VALUE_TARGET_MODE: "game"     # 价值目标模式（mcts/game/mixed/anneal；mcts->game：向终局胜负真值学习）
+    VALUE_TARGET_MODE: "game_hp"     # 价值目标模式（mcts/game/mixed/anneal/game_hp；mcts->game：向终局胜负真值学习）
+                                  # game_hp：胜负用终局真值、平局改用终局子力差（4x2 平局占比过半，原目标恒为 0）
     VALUE_MIX_GAME_WEIGHT: 0.5    # mixed 模式的终局价值权重 λ：target=(1-λ)*mcts_value+λ*game_result
     VALUE_TARGET_ANNEAL_ROUNDS: 0 # value 目标退火总轮数（0=关闭）
     VALUE_ANNEAL_START: 0.2       # 价值退火起始系数
@@ -295,7 +296,7 @@ common:
     ARCHIVE_ENABLED: false
 
   health_head:
-    HEALTH_VALUE_HEAD_ENABLED: true    # 启用血量差异分类头：第三头预测终局血量差，缓解 4x2 平局多导致的价值信号稀疏
+    HEALTH_VALUE_HEAD_ENABLED: false   # 默认关闭：三变体网络语义统一为「策略 + 价值」两头，跨变体迁移/评测基线一致；需实验时显式开启
     HEALTH_LOSS_WEIGHT: 0.25           # 血量头交叉熵 loss 权重 α
     HEALTH_UTILITY_WEIGHT: 0.15        # MCTS 复合效用中血量期望权重 λ
     HEALTH_UTILITY_CONFIDENCE_EXP: 0.0 # λ 自适应指数；0=常量 λ

@@ -333,6 +333,8 @@ class Config:
     ARCHIVE_ENABLED: bool
     ARCHIVE_PREFILL_GAMES: int
     ARCHIVE_PREFILL_DIR: str
+    # 价值目标模式：mcts | game | mixed | anneal | game_hp
+    # game_hp = 胜负用 game_result 真值，平局改用终局子力差（∈[-1,1]，与胜负同量纲）
     VALUE_TARGET_MODE: str
     VALUE_TARGET_ANNEAL_ROUNDS: int  # value 目标退火总轮数（0=关闭）
     VALUE_ANNEAL_START: float
