@@ -76,6 +76,15 @@ class DataBuffer:
             raise ValueError(
                 f"未知 VALUE_TARGET_MODE={cfg.VALUE_TARGET_MODE!r}，可选 {sorted(modes)}"
             )
+        # 策略目标变换参数校验：T<=0 会让 p^(1/T) 产出 inf/NaN，ε 越界破坏概率语义
+        if float(cfg.POLICY_TARGET_TEMPERATURE) <= 0.0:
+            raise ValueError(
+                f"POLICY_TARGET_TEMPERATURE 必须 > 0（1.0 = 恒等）: {cfg.POLICY_TARGET_TEMPERATURE}"
+            )
+        if not 0.0 <= float(cfg.POLICY_TARGET_ACTION_MIX) <= 1.0:
+            raise ValueError(
+                f"POLICY_TARGET_ACTION_MIX 必须在 [0,1]（0.0 = 恒等）: {cfg.POLICY_TARGET_ACTION_MIX}"
+            )
         self.C = build_constants(variant)
         self.capacity = max(self.capacity, self.C.TRAIN_BATCH
                             if hasattr(self.C, "TRAIN_BATCH") else 32)
@@ -136,6 +145,34 @@ class DataBuffer:
             return (1.0 - w) * float(mv) + w * float(gr)
         return float(mv)  # mcts（默认）
 
+    def _target_policy(self, probs: np.ndarray, teacher_action) -> np.ndarray:
+        """策略目标变换（两个旋钮默认均为恒等，逐位等价于旧行为）：
+
+          T < 1  : 温度锐化 p' ∝ p^(1/T)，重新归一化（只放大既有分布，不引入新信息）
+          ε > 0  : 与搜索动作的 one-hot 混合 p'' = (1-ε)·p' + ε·onehot(a)
+
+        ⚠️ ε 通道要先看数据：实测「记录动作」有 29.7% 不等于 argmax(π')（Gumbel 采样
+        噪声），用它做 one-hot 相当于把探索噪声当正确答案，默认关闭。
+        teacher_action 非法（缺失/越界）时静默跳过 ε 通道。
+        """
+        temp = float(self.cfg.POLICY_TARGET_TEMPERATURE)
+        mix = float(self.cfg.POLICY_TARGET_ACTION_MIX)
+        if temp == 1.0 and mix == 0.0:
+            return probs
+        out = probs
+        if temp != 1.0:
+            sharpened = np.power(out, 1.0 / temp)
+            total = sharpened.sum()
+            if total > 0.0 and np.isfinite(total):
+                out = sharpened / total
+        if mix > 0.0 and teacher_action is not None:
+            a = int(teacher_action)
+            if 0 <= a < out.shape[0]:
+                onehot = np.zeros_like(out)
+                onehot[a] = 1.0
+                out = (1.0 - mix) * out + mix * onehot
+        return out.astype(np.float32)
+
     def _draw_hp_target(self, health_diff: float) -> float:
         """平局样本的价值目标：终局子力差 / INITIAL_HEALTH ∈ [-1, 1]。
 
@@ -183,6 +220,10 @@ class DataBuffer:
             ):
                 dropped += 1
                 continue
+
+            # 策略目标变换（温度锐化 / 与搜索动作 one-hot 混合；默认恒等）：
+            # 放在合法性校验之后，避免对非法输入（负概率）先做 p^(1/T) 产生 NaN。
+            probs = self._target_policy(probs, s.get('teacher_action'))
 
             # 环形写入：覆盖 head 位置，然后 head 前移（超容量则淘汰最旧样本）
             i = self._head

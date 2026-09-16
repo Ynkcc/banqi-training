@@ -143,6 +143,20 @@ common:
     VALUE_DRIFT_EVAL_ROUNDS: 5    # 价值漂移评估轮数（全变体统一为 5）
     VALUE_DRIFT_NUM_POSITIONS: 500  # 价值漂移评估位置数（默认 500）
 
+  # ---------------- 策略目标变换（B2 策略目标锐化，可选；默认恒等） ----------------
+  # 前提已实测（2026-09-16，4x2 语料诊断）：同代自对弈的 π' 并不软——归一化熵 0.41、
+  # top1-top2 间隔中位 0.67、间隔<0.05 仅占 4%；而「记录动作」有 29.7% 不等于
+  # argmax(π')（Gumbel 采样噪声的必然结果）。
+  #   → POLICY_TARGET_ACTION_MIX（按记录动作做 one-hot）等于把探索噪声当正确答案，
+  #     默认 0，**不建议启用**；
+  #   → POLICY_TARGET_TEMPERATURE（温度锐化）只放大既有分布、不引入新信息，风险更低，
+  #     但上限受「目标本已很尖」限制。两者都必须经闭环胜率验证，离线 top-1 不足以定论。
+  # 另注：策略头评测口径已修正——训练日志同时输出「vs 记录动作（含噪）」与
+  # 「vs 搜索偏好 π'」两套 Top-1/Top-2（eval.py::eval_policy_accuracy）。
+  policy_target:
+    POLICY_TARGET_TEMPERATURE: 1.0   # p' ∝ p^(1/T)，T<1 更尖；1.0 = 恒等（必须 > 0）
+    POLICY_TARGET_ACTION_MIX: 0.0    # 与搜索动作 one-hot 混合比 ε∈[0,1]；0.0 = 恒等
+
   # ---------------- 血量差异价值头（离散分类，可选） ----------------
   # 网络新增第三头预测终局整型血量差分布（K=2*INITIAL_HEALTH+1 分桶，One-hot+CE）。
   # HEALTH_VALUE_HEAD_ENABLED=false 时模型结构与旧版逐位等价。

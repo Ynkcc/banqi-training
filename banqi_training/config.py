@@ -413,6 +413,14 @@ class Config:
     VALUE_DIST_ENABLED: bool = False       # 是否启用分布化价值头（value loss: MSE → HL-Gauss CE）
     VALUE_DIST_BINS: int = 65              # 价值分桶数（须为 ≥3 的奇数；3 = WDL 三分类，65 = 细粒度分布）
     VALUE_GAUSS_SIGMA: float = 0.05        # 价值 HL-Gauss 平滑标准差（价值单位，∈(0,1]；内部按桶数换算）
+    # ============ 策略目标变换（B2 策略目标锐化，可选；默认恒等） ============
+    # 前提已实测（2026-09-16，4x2 语料诊断）：同代自对弈的 π' 并不软——归一化熵 0.41、
+    # top1-top2 间隔中位 0.67、间隔<0.05 只占 4%；而「记录动作」有 29.7% 不等于
+    # argmax(π')（Gumbel 采样噪声）。因此**按记录动作做 one-hot 是把探索噪声当正确答案**，
+    # POLICY_TARGET_ACTION_MIX 默认 0 且不建议启用；温度锐化只放大既有分布，风险更低，
+    # 但上限受「目标本已很尖」限制。两者都必须经闭环胜率验证，不能只看离线 top-1。
+    POLICY_TARGET_TEMPERATURE: float = 1.0  # 温度锐化 p' ∝ p^(1/T)，T<1 更尖；1.0 = 恒等
+    POLICY_TARGET_ACTION_MIX: float = 0.0   # 与搜索动作 one-hot 的混合比 ε∈[0,1]；0 = 恒等
     # ============ 采样与增强节流（可选，带默认值向后兼容） ============
     DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
     MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)

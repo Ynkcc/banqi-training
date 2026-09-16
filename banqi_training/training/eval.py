@@ -45,6 +45,27 @@ def select_balanced_fixed_samples(pool: List[Dict], n_fixed: int) -> List[Dict]:
     return selected[:n_fixed]
 
 
+def _policy_top2(samples: List[Dict], masks: np.ndarray, aspace: int) -> np.ndarray:
+    """由策略目标 π' 取每个局面的前二动作（非法动作屏蔽，缺失策略填 -1）。
+
+    π' = 搜索产物（softmax(logit + σ·completed_Q)），是比「单次采样动作」稳定得多的
+    评测参照：实测记录动作有 29.7% 不等于 argmax(π')，用它当标签会低估策略头。
+    """
+    out = np.full((len(samples), 2), -1, dtype=np.int64)
+    for i, s in enumerate(samples):
+        raw = s.get("policy_probs")
+        if raw is None:
+            continue
+        p = np.asarray(raw, dtype=np.float64)[:aspace]
+        if p.shape[0] < aspace:
+            p = np.pad(p, (0, aspace - p.shape[0]))
+        p = np.where(masks[i] >= 0.5, p, -1.0)   # 非法动作置负，避免被选进 top2
+        if (p < 0).all():
+            continue
+        out[i] = np.argsort(-p)[:2]
+    return out
+
+
 def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
     """将 Dict 列表样本构建为 numpy array 组成的固定验证集。"""
     if not samples:
@@ -87,6 +108,12 @@ def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
                 ],
                 dtype=np.int64,
             ),
+            # 搜索偏好的两个口径（见 eval_policy_accuracy）：
+            #   teacher_actions = 记录动作（自对弈下即 Gumbel 采样结果，约 30% 不等于
+            #                     策略目标自己的 argmax，故它是一个带噪的评测标签）；
+            #   pi_top2         = 训练目标 π' 的前二动作（搜索真正的偏好，噪声更低）。
+            # 两者并列报告，避免用带噪标签低估策略头（实测 0.60 vs 0.87）。
+            "pi_top2": _policy_top2(samples, masks, aspace),
         }
     except Exception:
         return None
@@ -246,12 +273,28 @@ def eval_policy_accuracy(
         hit1 = float(np.mean(top1_idx == ta))
         hit3 = float(np.mean(np.any(topk_idx == ta[:, None], axis=1)))
         n_eval = int(valid.sum())
+        # 第二口径：与策略目标 π' 的 argmax / top2 对照。记录动作含 Gumbel 采样噪声
+        # （实测 29.7% 不等于 argmax(π')），单看 top1_vs_teacher 会低估策略头，
+        # 也容易把「标签噪声」误判成「策略头学不会搜索决策」。
+        pi2 = fixed_eval.get("pi_top2")
+        hit_pi1 = hit_pi2 = float("nan")
+        if pi2 is not None:
+            pi2 = pi2[valid]
+            ok = pi2[:, 0] >= 0
+            if ok.any():
+                p2 = pi2[ok]
+                t1 = top1_idx[ok]
+                hit_pi1 = float(np.mean(t1 == p2[:, 0]))
+                hit_pi2 = float(np.mean(np.any(p2 == t1[:, None], axis=1)))
         print(
-            f"{tag} 🎯 策略头命中 Round#{round_num}: Top-1={hit1:.3f} "
-            f"Top-3={hit3:.3f}（{n_eval} 局面 vs 启发式/MCTS 最优动作）"
+            f"{tag} 🎯 策略头命中 Round#{round_num}: "
+            f"Top-1={hit1:.3f} Top-3={hit3:.3f}（vs 记录动作，含采样噪声） | "
+            f"Top-1={hit_pi1:.3f} Top-2={hit_pi2:.3f}（vs 搜索偏好 π'，{n_eval} 局面）"
         )
         add_scalar("policy_acc/top1_vs_teacher", hit1, global_step)
         add_scalar("policy_acc/top3_vs_teacher", hit3, global_step)
+        add_scalar("policy_acc/top1_vs_pi", hit_pi1, global_step)
+        add_scalar("policy_acc/top2_vs_pi", hit_pi2, global_step)
         add_scalar("policy_acc/n_positions", n_eval, global_step)
     except Exception as e:
         print(f"{tag} ⚠️ 策略头验证失败 ({e})")
