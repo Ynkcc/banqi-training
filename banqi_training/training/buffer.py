@@ -18,33 +18,30 @@ from banqi_training.variant import Variant
 
 def episode_to_samples(episode_dict: Dict) -> List[Dict]:
     """
-    把一个 episode dict（来自 self_play 队列）转换为 DataBuffer 可消费的
-    sample dict 列表，字段与 Mongo GameDocument.samples 一致
-    （含 health_diff，与归档数据同步）。
+    把一个 episode（episode_codec 解码结果，或增强后的同形 dict）转换为
+    DataBuffer 可消费的 sample dict 列表。
+
+    字段逐个直取：解码器已按 schema 保证全部字段存在，缺失即报错——不做
+    「缺字段就兜底」的静默降级（那正是数据契约漂移的藏身处）。
+    策略头验证用的 ground truth 取 actions（MCTS 实际选出的最优动作）。
     """
     samples = []
-    n = len(episode_dict["boards"])
-    health_diffs = episode_dict.get("health_diffs") or [0.0] * n
-    # 策略头验证 ground truth：
-    #   - rule_selfplay 数据带 teacher_actions（温度采样前的启发式/规则最优动作）
-    #   - 自对弈数据带 actions（MCTS 实际选择的最优动作）作为 fallback
-    teacher_actions = episode_dict.get("teacher_actions")
-    actions = episode_dict.get("actions")
-    # 算力分配随机化的 Full Search 标记；缺省视为 True（旧数据 / 教师 / 冷存储数据无此键）。
-    # True = 参与训练；False = Fast Search 样本，仅保留供未来处理逻辑使用。
-    is_full_search = episode_dict.get("is_full_search")
-    for step_idx, (board, scalar, policy, mcts_val, completed_q,
-                    root_visit, game_result, mask) in enumerate(zip(
-        episode_dict["boards"], episode_dict["scalars"], episode_dict["policies"],
-        episode_dict["mcts_values"], episode_dict["completed_qs"],
-        episode_dict["root_visits"], episode_dict["game_results"],
-        episode_dict["action_masks"],
-    )):
-        teacher_action = None
-        if teacher_actions is not None and step_idx < len(teacher_actions):
-            teacher_action = int(teacher_actions[step_idx])
-        elif actions is not None and step_idx < len(actions):
-            teacher_action = int(actions[step_idx])
+    boards = episode_dict["boards"]
+    scalars = episode_dict["scalars"]
+    policies = episode_dict["policies"]
+    mcts_values = episode_dict["mcts_values"]
+    completed_qs = episode_dict["completed_qs"]
+    root_visits = episode_dict["root_visits"]
+    game_results = episode_dict["game_results"]
+    masks = episode_dict["action_masks"]
+    health_diffs = episode_dict["health_diffs"]
+    actions = episode_dict["actions"]
+    is_full_search = episode_dict["is_full_search"]
+    for board, scalar, policy, mcts_val, completed_q, root_visit, game_result, mask, \
+            health_diff, action, is_full in zip(
+        boards, scalars, policies, mcts_values, completed_qs, root_visits,
+        game_results, masks, health_diffs, actions, is_full_search,
+    ):
         samples.append({
             "board_state": board,
             "scalar_state": scalar,
@@ -54,9 +51,9 @@ def episode_to_samples(episode_dict: Dict) -> List[Dict]:
             "root_visit_count": int(root_visit),
             "game_result_value": float(game_result),
             "action_mask": mask,
-            "teacher_action": teacher_action,
-            "health_diff": float(health_diffs[step_idx]),
-            "is_full_search": bool(is_full_search[step_idx]) if is_full_search is not None else True,
+            "teacher_action": int(action),
+            "health_diff": float(health_diff),
+            "is_full_search": bool(is_full),
         })
     return samples
 

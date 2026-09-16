@@ -119,7 +119,13 @@ def test_sq_map_involution() -> None:
 
 @pytest.mark.parametrize("vid", list(VARIANTS))
 def test_augmenter_roundtrip(vid: str) -> None:
-    """EpisodeAugmenter 对 episode dict 的增强结果与置换表 gather 一致。"""
+    """EpisodeAugmenter 对 episode dict 的增强结果与置换表 gather 一致。
+
+    输入的 episode dict 走解码器输出的形状约定：boards (steps, channels, rows, cols)，
+    policies / action_masks (steps, action_space)。
+    """
+    import numpy as np
+
     from banqi_training.training.augment import EpisodeAugmenter
 
     class _Cfg:
@@ -131,20 +137,24 @@ def test_augmenter_roundtrip(vid: str) -> None:
     C = build_constants(variant)
     aug = EpisodeAugmenter(variant, _Cfg())
     aspace = C.ACTION_SPACE_SIZE
+    rows, cols = C.BOARD_ROWS, C.BOARD_COLS
     channels = C.TOTAL_INPUT_CHANNELS
-    plane = C.BOARD_ROWS * C.BOARD_COLS
     ep = {
-        "boards": [[1.0] * (channels * plane)],
-        "policies": [[0.0] * aspace],
-        "action_masks": [[1.0] * aspace],
-        "actions": [0],
+        "boards": np.ones((1, channels, rows, cols), dtype=np.float32),
+        "policies": np.zeros((1, aspace), dtype=np.float32),
+        "action_masks": np.ones((1, aspace), dtype=np.int32),
+        "actions": np.array([0], dtype=np.uint32),
     }
     for t in variant.non_identity_transforms:
         out = aug.transform_episode(ep, t)
         perm = aug.permutation(t)
-        assert out["policies"] == [transform_policy(ep["policies"][0], perm)]
-        assert out["action_masks"] == [transform_policy(ep["action_masks"][0], perm)]
-        assert out["actions"] == [transform_action(0, perm)]
-        assert out["boards"] == [
-            transform_board(ep["boards"][0], C.BOARD_ROWS, C.BOARD_COLS, channels, t)
-        ]
+        assert out["boards"].shape == (1, channels, rows, cols)
+        assert out["boards"][0].reshape(-1).tolist() == transform_board(
+            ep["boards"][0].reshape(-1).tolist(), rows, cols, channels, t
+        )
+        assert out["policies"].shape == (1, aspace)
+        assert out["policies"][0].tolist() == transform_policy(ep["policies"][0].tolist(), perm)
+        assert out["action_masks"][0].tolist() == transform_policy(
+            ep["action_masks"][0].tolist(), perm
+        )
+        assert out["actions"].tolist() == [transform_action(0, perm)]

@@ -78,16 +78,22 @@ class SchedulerModelRegistry:
         import urllib.request
 
         sha = self.sha256_of(model_path)
+        # 权重格式取文件扩展名（与对象键扩展名同源，worker 据此分派加载器）
+        fmt = os.path.splitext(model_path)[1].lstrip(".").lower()
+        if not fmt:
+            print(f"[registry] ⚠️ 模型路径缺少扩展名，无法判定权重格式: {model_path}")
+            return
         with open(model_path, "rb") as f:
             body = f.read()
 
-        # 1. 请求调度器签发预签名 PUT（对象键 networks/<sha>.bin）
+        # 1. 请求调度器签发预签名 PUT（对象键 networks/<sha>.<format>）
         sign = self._stub.SignNetworkUpload(
             self._pb2.SignNetworkUploadRequest(
                 trainer_id=f"trainer-{os.getpid()}",
                 sha=sha,
                 content_length=len(body),
                 content_sha256=sha,
+                format=fmt,
             )
         )
         if not sign.accepted:
@@ -107,6 +113,7 @@ class SchedulerModelRegistry:
                 sha=sha,
                 parent_sha=self.last_sha or "",
                 notes=f"trainer publish {os.path.basename(model_path)}",
+                format=fmt,
             )
         )
         if not ack.accepted:

@@ -77,7 +77,7 @@ def run_distributed(variant_id: str) -> None:
 
     start_memory_guard()
 
-    store = SchedulerEpisodeStore()
+    store = SchedulerEpisodeStore(variant=variant_id)
     registry = SchedulerModelRegistry()
     counting_q = CountingQueue(store)
 

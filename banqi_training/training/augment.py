@@ -9,6 +9,8 @@ from __future__ import annotations
 import random
 from typing import Dict, List
 
+import numpy as np
+
 from banqi_training.constants import build_constants
 from banqi_training.symmetry import (
     get_action_symmetry_table,
@@ -39,27 +41,37 @@ class EpisodeAugmenter:
         return perm
 
     def transform_episode(self, episode_dict: Dict, transform: str) -> Dict:
-        """对一个 episode dict 做空间对称增强（全部由 Rust 绑定执行）。"""
+        """对一个 episode dict 做空间对称增强。
+
+        输入/输出形状保持一致：boards 恒为 (steps, channels, rows, cols) 的
+        float32 数组，policies/action_masks 恒为 (steps, action_space)。
+        """
         out = dict(episode_dict)
         perm = self.permutation(transform)
         rows, cols = self.C.BOARD_ROWS, self.C.BOARD_COLS
         channels = self.C.TOTAL_INPUT_CHANNELS
-        # board 特征空间重排（Rust）
-        out["boards"] = [
-            transform_board(
-                list(b), rows, cols, channels, transform
-            )
-            for b in out["boards"]
-        ]
-        # policy / action_mask 按置换表 gather（Rust 提供 gather）
-        def _gather(p):
-            return transform_policy(list(p), perm)
-        out["policies"] = [_gather(p) for p in out["policies"]]
-        out["action_masks"] = [_gather(m) for m in out["action_masks"]]
-        if out.get("actions"):
-            out["actions"] = [
-                int(transform_action(a, perm)) for a in out["actions"]
-            ]
+        boards = out["boards"]
+        steps = len(boards)
+        # board 特征空间重排（扁平重排后还原成原形）
+        out["boards"] = np.asarray(
+            [
+                transform_board(
+                    np.asarray(b).reshape(-1).tolist(), rows, cols, channels, transform
+                )
+                for b in boards
+            ],
+            dtype=np.float32,
+        ).reshape(steps, channels, rows, cols)
+        # policy / action_mask 按置换表 gather
+        out["policies"] = np.asarray(
+            [transform_policy(list(p), perm) for p in out["policies"]], dtype=np.float32
+        )
+        out["action_masks"] = np.asarray(
+            [transform_policy(list(m), perm) for m in out["action_masks"]], dtype=np.int32
+        )
+        out["actions"] = np.asarray(
+            [transform_action(int(a), perm) for a in out["actions"]], dtype=np.uint32
+        )
         return out
 
     def augment(self, episode_dict: Dict) -> List[Dict]:

@@ -2,18 +2,18 @@
 
 分布式形态：worker（banqi-collector）把 episode 直传 R2，Trainer 经
 Go scheduler 的 gRPC ListEpisodes 拿预签名 GET 列表拉取解析。
-字段契约由 Rust `serialize::episode_to_dict_json` 保证（与 PyO3/gRPC 路径一致）。
+记录格式（EpisodeBatch 二进制，proto 契约）由 banqi_training.episode_codec 解码。
 """
 
 from __future__ import annotations
 
 import gzip
-import io
-import json
 import os
 import time
 from collections import deque
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Protocol
+
+from banqi_training.episode_codec import decode_episode_batch
 
 
 class EpisodeStore(Protocol):
@@ -33,17 +33,25 @@ class SchedulerEpisodeStore:
 
     R2 凭据只在调度器持有：本类调 gRPC ListEpisodes 获取预签名 GET 列表
     （游标分页，服务端按 episode 登记顺序推进），再经 HTTP 下载解析。对象键布局
-    `episodes/<network_sha>/<data_id>.jsonl.gz`。trainer 零存储配置，
+    `episodes/<network_sha>/<data_id>.epb.gz`。trainer 零存储配置，
     仅需 SCHEDULER_ENDPOINT。
+
+    variant 非空时校验每条记录的变体标签，防止跨变体数据混入训练。
     """
 
     PAGE_LIMIT = 200
 
-    def __init__(self, endpoint: Optional[str] = None, poll_interval: float = 5.0) -> None:
+    def __init__(
+        self,
+        variant: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        poll_interval: float = 5.0,
+    ) -> None:
         import grpc
 
         from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
 
+        self.variant = variant
         self.endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
         self.poll_interval = poll_interval
         self._pb2 = scheduler_pb2
@@ -51,7 +59,7 @@ class SchedulerEpisodeStore:
         target = self.endpoint.split("://", 1)[-1]
         self._stub = scheduler_pb2_grpc.SchedulerServiceStub(grpc.insecure_channel(target))
         self._cursor: str = ""  # object_key 游标：服务端据此定位登记顺序，该键已消费
-        self._pending: List[str] = []  # 已列出未下载的 (key, url)
+        self._pending: List[tuple] = []  # 已列出未下载的 (key, url)
         # 已下载对象的解析结果缓存：一个对象含多局 episode，调用方逐个消费
         # （get() 只取首项），必须缓存未消费的余项，否则对象键已出队、
         # 余下对局会被静默丢弃。
@@ -90,14 +98,18 @@ class SchedulerEpisodeStore:
                 return
             key, url = self._pending.pop(0)
             try:
-                body = self._download(url)
-                with gzip.open(io.BytesIO(body), "rt", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            self._buffered.append(json.loads(line))
+                batch = decode_episode_batch(
+                    gzip.decompress(self._download(url)), expect_variant=self.variant
+                )
+                # 解码顺序即样本顺序：先缓冲完本对象，再逐条交给调用方
+                self._buffered.extend(batch.episodes)
+                if batch.nnue_episodes:
+                    print(
+                        f"[EpisodeStore] ⚠️ 对象 {key} 含 {len(batch.nnue_episodes)} 局 "
+                        f"NNUE 专属 episode，本训练端暂未消费（NNUE 蒸馏未接通），已丢弃"
+                    )
             except Exception as exc:
-                print(f"[EpisodeStore] ⚠️ 跳过损坏对象 {key}: {exc}")
+                print(f"[EpisodeStore] ⚠️ 跳过无法解码的对象 {key}: {exc}")
 
     def drain(self) -> List[Dict[str, Any]]:
         return list(self.iter_new_episodes())

@@ -35,9 +35,10 @@ python -m banqi_training.trainer_cli 4x8
 ## 结构
 
 ```
-proto/scheduler.proto        gRPC 契约（从 banqi-scheduler 复制，单一来源在 scheduler 仓库）
+proto/scheduler.proto        gRPC 契约 + 训练数据记录 schema（从 banqi-scheduler 复制，单一来源在 scheduler 仓库）
 banqi_training/
   proto/                     pb2 生成物（见 banqi_training/proto/__init__.py 注释的生成命令）
+  episode_codec.py           EpisodeBatch 二进制解码（训练数据唯一解码实现，零拷贝还原张量）
   infra/                     SchedulerEpisodeStore / SchedulerModelRegistry / scheduler_variant
   training/                  TrainWorker、buffer、losses、eval、lr_schedule、augment
   trainer_cli/               CLI 与 runners/distributed.py 编排入口
@@ -45,7 +46,13 @@ banqi_training/
   variant/actions/constants/nn_model/checkpoint/storage/tb_logger/memory_guard/system_monitor
   symmetry.py                空间对称增强（纯 Python：动作表 / D4 置换 / board 重排）
 tests/test_symmetry.py       对称增强单测（置换合法性 / 动作计数 / 增强一致性）
+tests/test_episode_codec.py  episode 记录解码单测（位平面布局 / 张量还原 / 契约校验）
 ```
+
+训练数据格式：worker 把一批 episode 编码为 `EpisodeBatch`（proto 定义，字段号 +
+`schema_version`）→ gzip → 直传 R2，对象键 `episodes/<sha>/<id>.epb.gz`；本端由
+`episode_codec.decode_episode_batch` 解码为 numpy 张量（棋盘位平面 / 掩码位图位打包，
+标量策略等走稠密小端缓冲）。版本不认识、变体不符、长度不符一律抛错，不静默降级。
 
 ## 与其他仓库的关系
 

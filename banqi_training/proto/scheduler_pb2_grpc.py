@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import scheduler_pb2 as scheduler__pb2
+from banqi_training.proto import scheduler_pb2 as banqi__training_dot_proto_dot_scheduler__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in scheduler_pb2_grpc.py depends on'
+        + ' but the generated code in banqi_training/proto/scheduler_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -36,48 +36,48 @@ class SchedulerServiceStub(object):
         """
         self.GetInfo = channel.unary_unary(
                 '/scheduler.SchedulerService/GetInfo',
-                request_serializer=scheduler__pb2.GetInfoRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.GetInfoReply.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.GetInfoRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.GetInfoReply.FromString,
                 _registered_method=True)
         self.GetTask = channel.unary_unary(
                 '/scheduler.SchedulerService/GetTask',
-                request_serializer=scheduler__pb2.TaskRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.TaskResponse.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.TaskRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.TaskResponse.FromString,
                 _registered_method=True)
         self.ReportEpisode = channel.unary_unary(
                 '/scheduler.SchedulerService/ReportEpisode',
-                request_serializer=scheduler__pb2.EpisodeMeta.SerializeToString,
-                response_deserializer=scheduler__pb2.EpisodeAck.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.EpisodeMeta.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.EpisodeAck.FromString,
                 _registered_method=True)
         self.GetNetwork = channel.unary_unary(
                 '/scheduler.SchedulerService/GetNetwork',
-                request_serializer=scheduler__pb2.NetworkRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.NetworkInfo.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.NetworkRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.NetworkInfo.FromString,
                 _registered_method=True)
         self.RegisterNetwork = channel.unary_unary(
                 '/scheduler.SchedulerService/RegisterNetwork',
-                request_serializer=scheduler__pb2.RegisterNetworkRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.RegisterNetworkAck.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkAck.FromString,
                 _registered_method=True)
         self.ReportMatchResult = channel.unary_unary(
                 '/scheduler.SchedulerService/ReportMatchResult',
-                request_serializer=scheduler__pb2.MatchResult.SerializeToString,
-                response_deserializer=scheduler__pb2.MatchResultAck.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.MatchResult.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.MatchResultAck.FromString,
                 _registered_method=True)
         self.Heartbeat = channel.unary_unary(
                 '/scheduler.SchedulerService/Heartbeat',
-                request_serializer=scheduler__pb2.HeartbeatRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.HeartbeatReply.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatReply.FromString,
                 _registered_method=True)
         self.SignNetworkUpload = channel.unary_unary(
                 '/scheduler.SchedulerService/SignNetworkUpload',
-                request_serializer=scheduler__pb2.SignNetworkUploadRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.SignNetworkUploadAck.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadAck.FromString,
                 _registered_method=True)
         self.ListEpisodes = channel.unary_unary(
                 '/scheduler.SchedulerService/ListEpisodes',
-                request_serializer=scheduler__pb2.ListEpisodesRequest.SerializeToString,
-                response_deserializer=scheduler__pb2.ListEpisodesReply.FromString,
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.FromString,
                 _registered_method=True)
 
 
@@ -143,48 +143,48 @@ def add_SchedulerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'GetInfo': grpc.unary_unary_rpc_method_handler(
                     servicer.GetInfo,
-                    request_deserializer=scheduler__pb2.GetInfoRequest.FromString,
-                    response_serializer=scheduler__pb2.GetInfoReply.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.GetInfoRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.GetInfoReply.SerializeToString,
             ),
             'GetTask': grpc.unary_unary_rpc_method_handler(
                     servicer.GetTask,
-                    request_deserializer=scheduler__pb2.TaskRequest.FromString,
-                    response_serializer=scheduler__pb2.TaskResponse.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.TaskRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.TaskResponse.SerializeToString,
             ),
             'ReportEpisode': grpc.unary_unary_rpc_method_handler(
                     servicer.ReportEpisode,
-                    request_deserializer=scheduler__pb2.EpisodeMeta.FromString,
-                    response_serializer=scheduler__pb2.EpisodeAck.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.EpisodeMeta.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.EpisodeAck.SerializeToString,
             ),
             'GetNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.GetNetwork,
-                    request_deserializer=scheduler__pb2.NetworkRequest.FromString,
-                    response_serializer=scheduler__pb2.NetworkInfo.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.NetworkRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.NetworkInfo.SerializeToString,
             ),
             'RegisterNetwork': grpc.unary_unary_rpc_method_handler(
                     servicer.RegisterNetwork,
-                    request_deserializer=scheduler__pb2.RegisterNetworkRequest.FromString,
-                    response_serializer=scheduler__pb2.RegisterNetworkAck.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkAck.SerializeToString,
             ),
             'ReportMatchResult': grpc.unary_unary_rpc_method_handler(
                     servicer.ReportMatchResult,
-                    request_deserializer=scheduler__pb2.MatchResult.FromString,
-                    response_serializer=scheduler__pb2.MatchResultAck.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.MatchResult.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.MatchResultAck.SerializeToString,
             ),
             'Heartbeat': grpc.unary_unary_rpc_method_handler(
                     servicer.Heartbeat,
-                    request_deserializer=scheduler__pb2.HeartbeatRequest.FromString,
-                    response_serializer=scheduler__pb2.HeartbeatReply.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatReply.SerializeToString,
             ),
             'SignNetworkUpload': grpc.unary_unary_rpc_method_handler(
                     servicer.SignNetworkUpload,
-                    request_deserializer=scheduler__pb2.SignNetworkUploadRequest.FromString,
-                    response_serializer=scheduler__pb2.SignNetworkUploadAck.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadAck.SerializeToString,
             ),
             'ListEpisodes': grpc.unary_unary_rpc_method_handler(
                     servicer.ListEpisodes,
-                    request_deserializer=scheduler__pb2.ListEpisodesRequest.FromString,
-                    response_serializer=scheduler__pb2.ListEpisodesReply.SerializeToString,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -212,8 +212,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/GetInfo',
-            scheduler__pb2.GetInfoRequest.SerializeToString,
-            scheduler__pb2.GetInfoReply.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.GetInfoRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.GetInfoReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -239,8 +239,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/GetTask',
-            scheduler__pb2.TaskRequest.SerializeToString,
-            scheduler__pb2.TaskResponse.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.TaskRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.TaskResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -266,8 +266,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/ReportEpisode',
-            scheduler__pb2.EpisodeMeta.SerializeToString,
-            scheduler__pb2.EpisodeAck.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.EpisodeMeta.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.EpisodeAck.FromString,
             options,
             channel_credentials,
             insecure,
@@ -293,8 +293,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/GetNetwork',
-            scheduler__pb2.NetworkRequest.SerializeToString,
-            scheduler__pb2.NetworkInfo.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.NetworkRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.NetworkInfo.FromString,
             options,
             channel_credentials,
             insecure,
@@ -320,8 +320,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/RegisterNetwork',
-            scheduler__pb2.RegisterNetworkRequest.SerializeToString,
-            scheduler__pb2.RegisterNetworkAck.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.RegisterNetworkAck.FromString,
             options,
             channel_credentials,
             insecure,
@@ -347,8 +347,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/ReportMatchResult',
-            scheduler__pb2.MatchResult.SerializeToString,
-            scheduler__pb2.MatchResultAck.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.MatchResult.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.MatchResultAck.FromString,
             options,
             channel_credentials,
             insecure,
@@ -374,8 +374,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/Heartbeat',
-            scheduler__pb2.HeartbeatRequest.SerializeToString,
-            scheduler__pb2.HeartbeatReply.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.HeartbeatReply.FromString,
             options,
             channel_credentials,
             insecure,
@@ -401,8 +401,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/SignNetworkUpload',
-            scheduler__pb2.SignNetworkUploadRequest.SerializeToString,
-            scheduler__pb2.SignNetworkUploadAck.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.SignNetworkUploadAck.FromString,
             options,
             channel_credentials,
             insecure,
@@ -428,8 +428,8 @@ class SchedulerService(object):
             request,
             target,
             '/scheduler.SchedulerService/ListEpisodes',
-            scheduler__pb2.ListEpisodesRequest.SerializeToString,
-            scheduler__pb2.ListEpisodesReply.FromString,
+            banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.FromString,
             options,
             channel_credentials,
             insecure,

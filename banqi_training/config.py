@@ -382,7 +382,7 @@ class Config:
     # 主闭环 MCTS 自对弈 episode 经 TeeQueue 分流到 NnueDistillWorker：
     # 稀疏特征+混合价值标签蒸馏训练 BanqiNNUE，周期导出 .nnue 供 expectimax 使用。
     NNUE_DISTILL_ENABLED: bool = False              # 是否启用主闭环 NNUE 蒸馏
-    NNUE_DISTILL_DATA_DIR: str = ""                 # episode JSONL 落盘目录（留档复训）
+    NNUE_DISTILL_DATA_DIR: str = ""                 # episode 归档目录（留档复训）
     NNUE_DISTILL_OUTPUT_DIR: str = ""               # .nnue 导出目录（expectimax 选手消费）
     NNUE_DISTILL_EVERY_N_CHECKPOINTS: int = 5       # 每 N 次 checkpoint 蒸馏一次
     NNUE_DISTILL_MIN_SAMPLES: int = 50000           # 触发蒸馏的最小累积样本数
@@ -395,7 +395,7 @@ class Config:
     NNUE_MAX_SAMPLES: int = 2000000                 # 蒸馏样本池容量上限（FIFO 淘汰）
     # ============ Expectimax 强自对弈旁路（可选，默认关闭） ============
     # checkpoint 事件驱动的周期任务：expectimax 强搜索自对弈生成高质量
-    # NNUE JSONL（精调）+ 对局统计。成本高，仅作低频 sidecar。
+    # NNUE 记录（精调）+ 对局统计。成本高，仅作低频 sidecar。
     EXPECTIMAX_SIDECAR_ENABLED: bool = False            # 是否启用 expectimax 旁路
     EXPECTIMAX_SIDECAR_EVERY_N_CHECKPOINTS: int = 20    # 每 N 次 checkpoint 触发一次
     EXPECTIMAX_SIDECAR_GAMES: int = 200                 # 每次触发对局数
