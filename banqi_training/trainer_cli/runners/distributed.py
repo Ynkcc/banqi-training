@@ -86,8 +86,12 @@ def run_distributed(variant_id: str) -> None:
     thread_stop = threading.Event()
     # 先构造 TrainWorker（构造期导出冷启动初始模型），再让 publisher 监听它实际
     # 写出的 onnx 路径：启用血量头时是 last_health.onnx，与 config.ONNX_PATH 不同。
+    # ckpt_dir 必须跟 config.OUTPUT_DIR 走（variant.checkpoints_dir 对 OUTPUT_DIR 无感）：
+    # 否则同变体的两个实验臂会共用同一 ckpt 路径，后启动的臂会 resume 前一臂的权重
+    # （A/B 方案 §2.2 标记为「没做这一步，实验无效」的陷阱）。
     train_worker = TrainWorker(
         variant, config, counting_q, thread_stop,
+        ckpt_dir=os.path.join(config.OUTPUT_DIR, "checkpoints"),
         reanalysis_submitter=store.submit_reanalysis,
     )
     onnx_path = train_worker.onnx_path()
