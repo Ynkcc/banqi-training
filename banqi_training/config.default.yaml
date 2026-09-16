@@ -68,7 +68,10 @@ common:
     DATA_AUGMENT_KEEP_ORIGINAL: true  # 是否保留原始样本
     DATA_AUGMENT_K: 1             # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数，4x2/4x8=3、4x4=7）
     MIN_NEW_SAMPLES_TO_TRAIN: 0   # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
-                                  # 它同时决定 LR 余弦的实际推进速率（scheduler 按 batch 步进），须与 LR_DECAY_STEPS 一起标定
+                                  # 它同时决定每轮 batch 数，进而决定 LR 计划的推进速率（见 LR_DECAY_ROUNDS）
+    LR_DECAY_ROUNDS: 0            # LR 余弦的时间跨度，以「训练轮数」表达：>0 时按当前每轮 batch 数
+                                  # 自动折算成 batch 步数（改节流/TRAIN_BATCH/EPOCHS 后含义不变）；
+                                  # =0 时沿用 LR_DECAY_STEPS（按 batch 计的历史口径）。>0 时 LR_DECAY_STEPS 被忽略
     RECENT_SAMPLE_ENABLED: true   # 批量聚焦训练时启用「新近优先」采样
     FAST_SAMPLE_LOSS_WEIGHT: 0.0  # Fast Search 样本的 loss 权重（0=不参与，即旧行为；Full 恒为 1.0）
                                   # 配合 PLAYOUT_CAP_RANDOM_ENABLED 使用：给 Fast 样本折扣权重，换来 PCR 的对局吞吐

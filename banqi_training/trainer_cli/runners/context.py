@@ -184,6 +184,8 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
         "learning_rate": config.LEARNING_RATE,
         "min_lr": config.MIN_LR,
         "lr_decay_steps": config.LR_DECAY_STEPS,
+        "lr_decay_rounds": config.LR_DECAY_ROUNDS,
+        "batches_per_round": config.batches_per_round(),
         "train_epochs_per_round": config.TRAIN_EPOCHS_PER_ROUND,
         "weight_decay": config.WEIGHT_DECAY,
         "max_buffer": config.MAX_SAMPLE_BUFFER_SIZE,

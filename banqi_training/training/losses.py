@@ -57,13 +57,18 @@ def value_target_to_bin_position(values: torch.Tensor, num_classes: int) -> torc
 TrainStepStats = namedtuple(
     "TrainStepStats", "total policy value health grad_norm entropy value_mean value_std"
 )
-_ZERO_STATS = TrainStepStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: float = 0.999,
                health_enabled: bool = False, health_loss_weight: float = 0.0,
                health_gauss_sigma: float = 1.5, value_dist_enabled: bool = False,
-               value_gauss_sigma: float = 1.5, fast_sample_weight: float = 0.0) -> TrainStepStats:
+               value_gauss_sigma: float = 1.5, fast_sample_weight: float = 0.0) -> Optional[TrainStepStats]:
+    """单 batch 前向/反向。
+
+    返回 None 表示本 batch 无有效样本（weight_sum == 0，例如批次内全为 Fast 样本且
+    `fast_sample_weight == 0`）——没有参数更新，调用方不应计入训练步数、也不应消耗
+    LR 预算（否则 LR 计划会被空转的 batch 提前烧完）。
+    """
     model.train()
     boards_t, scalars_t, target_probs_t, target_values_t, masks_t, full_t, target_health_bin_t = batch_data
 
@@ -83,7 +88,8 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
     weight_t = full_t + fast_sample_weight * (1.0 - full_t)
     weight_sum = weight_t.sum()
     if bool(weight_sum <= 0.0):
-        return _ZERO_STATS
+        # 无有效样本：不更新参数，返回 None（调用方据此跳过 LR 步进与训练步计数）
+        return None
 
     # ---- 数据有效性（非有限/非法策略）已由 DataBuffer.add_samples 入队时
     # 前置过滤，此处假定输入完全合法，不再做冗余防御校验。----
@@ -191,7 +197,8 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                         fast_sample_weight: float = 0.0):
     """
     在完整 replay buffer 上训练指定个 epoch。
-    scheduler.step() 按 batch 步进以匹配 CosineAnnealingLR 的 T_max (batch 数)。
+    scheduler.step() 在每个**实际发生参数更新**的 batch 上步进一次（无有效样本的 batch
+    被跳过），以匹配余弦退火的时间跨度（batch 数，见 `lr_schedule.resolve_lr_decay_batches`）。
 
     max_batches: 限制本轮总训练批次数。当每轮新增数据量远小于 buffer（如 RL
     自对弈慢、每轮仅几百样本而 buffer 上万）时，若每轮对整个 buffer 训练多
@@ -238,6 +245,9 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                            value_dist_enabled=value_dist_enabled,
                            value_gauss_sigma=value_gauss_sigma,
                            fast_sample_weight=fast_sample_weight)
+            if s is None:
+                # 本 batch 无有效样本（参数未更新）：不计入训练步数、不消耗 LR 预算
+                continue
             scheduler.step()
             batch_total_l += s.total
             batch_pol_l += s.policy

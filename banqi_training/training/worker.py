@@ -25,7 +25,7 @@ from banqi_training.variant import Variant, get_variant
 from .augment import EpisodeAugmenter
 from .buffer import DataBuffer, episode_to_samples
 from .losses import run_training_epochs, _resolve_device
-from .lr_schedule import compute_lr_scale, is_stopped, make_cosine_clamp_scheduler
+from .lr_schedule import is_stopped, make_cosine_clamp_scheduler, resolve_lr_decay_batches
 from .eval import (
     build_fixed_eval,
     eval_policy_accuracy,
@@ -132,6 +132,9 @@ class TrainWorker(threading.Thread):
         self.ema_enabled = ema_enabled
         self.ema_decay = ema_decay
         self.ema_model = None
+        # LR 余弦的时间跨度（batch）：LR_DECAY_ROUNDS>0 时按每轮训练量折算，否则用
+        # LR_DECAY_STEPS。两处 scheduler 构造共用同一值，resume 时由 scheduler_state 续接。
+        self.lr_decay_batches = resolve_lr_decay_batches(cfg)
 
         if os.path.exists(self.last_ckpt_path()):  # resume
             print(f"[TR-{self.variant.id}] 从 checkpoint 恢复: {self.last_ckpt_path()}")
@@ -145,13 +148,17 @@ class TrainWorker(threading.Thread):
                     self.ema_model.load_state_dict(ckpt["ema_model_state"])
                 else:
                     self.ema_model.load_state_dict(self.model.state_dict())
+            # 这里的 lr 只是构造期占位：紧随其后的 optimizer_state / scheduler_state
+            # 会把实际 LR 与余弦进度（base_lrs + last_epoch）恢复到中断时的状态。
             self.optimizer = optim.AdamW(
                 self.model.parameters(),
-                lr=cfg.LEARNING_RATE * compute_lr_scale(ckpt.get("global_step", 0), cfg),
+                lr=cfg.LEARNING_RATE,
                 weight_decay=cfg.WEIGHT_DECAY,
             )
             self.optimizer.load_state_dict(ckpt["optimizer_state"])
-            self.scheduler = make_cosine_clamp_scheduler(self.optimizer, cfg)
+            self.scheduler = make_cosine_clamp_scheduler(
+                self.optimizer, cfg, self.lr_decay_batches
+            )
             if "scheduler_state" in ckpt:
                 self.scheduler.load_state_dict(ckpt["scheduler_state"])
             self.global_step = ckpt.get("global_step", 0)
@@ -170,7 +177,9 @@ class TrainWorker(threading.Thread):
                 self.model.parameters(), lr=cfg.LEARNING_RATE,
                 weight_decay=cfg.WEIGHT_DECAY
             )
-            self.scheduler = make_cosine_clamp_scheduler(self.optimizer, cfg)
+            self.scheduler = make_cosine_clamp_scheduler(
+                self.optimizer, cfg, self.lr_decay_batches
+            )
             self.global_step = 0
             self.start_global_step = 0
             self.start_total_samples = 0
@@ -191,6 +200,14 @@ class TrainWorker(threading.Thread):
         # 显式记录 value 目标模式（终端日志，便于复现/调试）
         print(f"[TR-{self.variant.id}] 价值目标模式={cfg.VALUE_TARGET_MODE}，"
               f"buffer 容量={buffer_capacity}，TRAIN_DEVICE={self.device}")
+
+        # LR 计划可读化：把 batch 跨度换算成「约多少训练轮」，替代用 LR_DECAY_STEPS 猜
+        per_round = cfg.batches_per_round()
+        source = (f"LR_DECAY_ROUNDS={cfg.LR_DECAY_ROUNDS}" if int(cfg.LR_DECAY_ROUNDS) > 0
+                  else f"LR_DECAY_STEPS={cfg.LR_DECAY_STEPS}")
+        print(f"[TR-{self.variant.id}] LR 计划: {self.lr_decay_batches} batch"
+              f"（每轮 ~{per_round} batch → 约 {self.lr_decay_batches / per_round:.0f} 轮退到"
+              f" MIN_LR={cfg.MIN_LR:g}），来源 {source}")
 
         # ---- value 目标退火（VALUE_TARGET_MODE='anneal' 时）----
         # 退火权重 w：前 N 轮用 mcts 平滑评估，后段切到 game_result 真值。
@@ -396,15 +413,12 @@ class TrainWorker(threading.Thread):
         # 若每局立即训练，max_batches 会按单局样本量被压到极小，训练碎片化且
         # 反复抽到旧数据。这里累积到足够新样本量才训练一次，让训练量充足且聚焦新数据
         # （selfplay 与 rule_selfplay 统一该逻辑）。阈值默认取 buffer 容量的 1/4，
-        # 可用 MIN_NEW_SAMPLES_TO_TRAIN 显式指定：它同时决定 LR 余弦的实际推进速率
-        # （scheduler 按 batch 步进），需与 LR_DECAY_STEPS 一起标定。
-        capacity_base = cfg.MAX_SAMPLE_BUFFER_SIZE
-        configured_min_new = int(cfg.MIN_NEW_SAMPLES_TO_TRAIN)
-        batch_train_min_samples = configured_min_new if configured_min_new > 0 else max(
-            cfg.TRAIN_BATCH * cfg.TRAIN_EPOCHS_PER_ROUND, capacity_base // 4
-        )
+        # 可用 MIN_NEW_SAMPLES_TO_TRAIN 显式指定；它同时决定每轮 batch 数，LR 计划若用
+        # LR_DECAY_ROUNDS 表达则自动按该值折算（见 lr_schedule.resolve_lr_decay_batches）。
+        batch_train_min_samples = cfg.min_new_samples_to_train()
         print(f"[TR-{self.variant.id}] 训练节流阈值={batch_train_min_samples} 新样本/轮"
-              f"（MIN_NEW_SAMPLES_TO_TRAIN={configured_min_new}，0=自动）")
+              f"（MIN_NEW_SAMPLES_TO_TRAIN={cfg.MIN_NEW_SAMPLES_TO_TRAIN}，0=自动）"
+              f" → 约 {cfg.batches_per_round()} batch/轮")
         pending_samples = 0   # 累积待训练的新样本数
         # 训练轮次由 trainer 自己维护并单调递增：分布式形态下 episode 不携带轮次，
         # 轮次恒为 0 会让 save_checkpoint 的 should_export 恒为假（训练期永不导出

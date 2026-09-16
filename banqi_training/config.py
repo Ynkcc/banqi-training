@@ -417,9 +417,35 @@ class Config:
     DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
     MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
     FAST_SAMPLE_LOSS_WEIGHT: float = 0.0   # Fast Search 样本的 loss 权重（0=不参与，即旧行为）；配合 PCR 使用，Full 恒为 1.0
+    # ============ 学习率计划口径（可选，带默认值向后兼容） ============
+    # LR 余弦的时间跨度：LR_DECAY_ROUNDS>0 时以「训练轮数」表达，按当前每轮训练量
+    # （见 batches_per_round）自动折算成 batch 步数，随节流阈值 / TRAIN_BATCH /
+    # TRAIN_EPOCHS_PER_ROUND 的变化保持一致；=0 时沿用 LR_DECAY_STEPS（按 batch 计）。
+    LR_DECAY_ROUNDS: int = 0
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    # ---- 派生量（由上面的字段推导，勿在别处重复同一公式） ----
+
+    def min_new_samples_to_train(self) -> int:
+        """触发一次训练所需的累计新样本数：显式配置优先，否则按 buffer 容量 1/4 推导。"""
+        explicit = int(self.MIN_NEW_SAMPLES_TO_TRAIN)
+        if explicit > 0:
+            return explicit
+        return max(
+            self.TRAIN_BATCH * self.TRAIN_EPOCHS_PER_ROUND,
+            self.MAX_SAMPLE_BUFFER_SIZE // 4,
+        )
+
+    def batches_per_round(self) -> int:
+        """每轮训练量的常态值（batch 数）：max_batches = 新样本/批大小 × epochs。
+
+        实际每轮的 pending 新样本会略高于节流阈值（按整局累积，可能超出不到一局的
+        样本量），故此值是常态估计；仅用于把「以轮数表达的 LR 计划」折算成 batch 步数。
+        """
+        batches = self.min_new_samples_to_train() / self.TRAIN_BATCH * self.TRAIN_EPOCHS_PER_ROUND
+        return max(1, int(batches + 0.5))
 
 
 # 已知字段集合与字段顺序（均由 dataclass 声明决定）
