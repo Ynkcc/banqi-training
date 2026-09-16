@@ -151,11 +151,11 @@ common:
     VALUE_DIST_BINS: 65         # 价值分桶数（须为 ≥3 的奇数，保证存在 0 中心桶）
     VALUE_GAUSS_SIGMA: 1.5      # HL-Gauss 标签平滑高斯标准差（桶；间距=1）
 
-  # ---------------- NNUE 蒸馏（主闭环旁路，可选） ----------------
-  # 主闭环 MCTS 自对弈 episode 分流到 NnueDistillWorker：稀疏特征蒸馏训练
+  # ---------------- NNUE 蒸馏（独立旁路，可选） ----------------
+  # 由采集端产出的 NNUE 类别 episode（Expectimax 强自对弈，稀疏特征）蒸馏训练
   # BanqiNNUE，周期导出 .nnue（outputs/nnue/<variant>_latest.nnue）供
-  # expectimax 选手 / sidecar 热加载。开启后自对弈自动附带
-  # collect_nnue_features=true（episode dict 增大，推理吞吐略降）。
+  # expectimax 选手 / sidecar 热加载。数据经调度器 SCHEDULER_DATA_KIND=nnue
+  # 下发采集；主闭环（ResNet 类别）不再顺带收集 NNUE 特征。
   nnue_distill:
     NNUE_DISTILL_ENABLED: false               # 是否启用主闭环 NNUE 蒸馏
     NNUE_DISTILL_DATA_DIR: "data/nnue"        # episode 归档目录（留档复训）

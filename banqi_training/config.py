@@ -378,10 +378,10 @@ class Config:
     RULE_SELFPLAY_TEMPERATURE: float  # 走子温度（温度越高越随机；0=贪心）
     RULE_SELFPLAY_BACKEND: str        # 并发后端：thread（多线程，默认）| process（多进程 spawn）
 
-    # ============ NNUE 蒸馏（主闭环旁路，可选，带默认值向后兼容） ============
-    # 主闭环 MCTS 自对弈 episode 经 TeeQueue 分流到 NnueDistillWorker：
-    # 稀疏特征+混合价值标签蒸馏训练 BanqiNNUE，周期导出 .nnue 供 expectimax 使用。
-    NNUE_DISTILL_ENABLED: bool = False              # 是否启用主闭环 NNUE 蒸馏
+    # ============ NNUE 蒸馏（独立旁路，可选，带默认值向后兼容） ============
+    # 消费采集端产出的 NNUE 类别 episode（Expectimax 强自对弈，稀疏特征 +
+    # 混合价值标签）蒸馏训练 BanqiNNUE，周期导出 .nnue 供 expectimax 使用。
+    NNUE_DISTILL_ENABLED: bool = False              # 是否启用 NNUE 蒸馏旁路
     NNUE_DISTILL_DATA_DIR: str = ""                 # episode 归档目录（留档复训）
     NNUE_DISTILL_OUTPUT_DIR: str = ""               # .nnue 导出目录（expectimax 选手消费）
     NNUE_DISTILL_EVERY_N_CHECKPOINTS: int = 5       # 每 N 次 checkpoint 蒸馏一次
