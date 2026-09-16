@@ -416,6 +416,7 @@ class Config:
     # ============ 采样与增强节流（可选，带默认值向后兼容） ============
     DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
     MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
+    FAST_SAMPLE_LOSS_WEIGHT: float = 0.0   # Fast Search 样本的 loss 权重（0=不参与，即旧行为）；配合 PCR 使用，Full 恒为 1.0
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

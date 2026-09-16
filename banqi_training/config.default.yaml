@@ -55,6 +55,7 @@ common:
     SELF_PLAY_BACKEND: "thread"   # 并发后端（保留兼容；实际推理侧由 INFER_SIDE 决定）
     INFER_SIDE: "rust"            # 推理执行侧："python"(多进程, Python run_python_match) | "rust"(多线程, Rust run_native_match 管理线程, 透传 num_threads)
     PLAYOUT_CAP_RANDOM_ENABLED: false # 关闭算力分配随机化：每局自对弈都用完整 MCTS_SIMS 搜索，保证数据质量
+                                  # 开启前须同时把 FAST_SAMPLE_LOSS_WEIGHT 设为 >0，否则 Fast 样本（占 1-FULL_SEARCH_PROB）被完全丢弃
     FAST_MCTS_SIMS: 16            # Fast Search 模拟次数
     FULL_SEARCH_PROB: 0.25        # Full Search 出现概率 (25%)
 
@@ -69,6 +70,8 @@ common:
     MIN_NEW_SAMPLES_TO_TRAIN: 0   # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
                                   # 它同时决定 LR 余弦的实际推进速率（scheduler 按 batch 步进），须与 LR_DECAY_STEPS 一起标定
     RECENT_SAMPLE_ENABLED: true   # 批量聚焦训练时启用「新近优先」采样
+    FAST_SAMPLE_LOSS_WEIGHT: 0.0  # Fast Search 样本的 loss 权重（0=不参与，即旧行为；Full 恒为 1.0）
+                                  # 配合 PLAYOUT_CAP_RANDOM_ENABLED 使用：给 Fast 样本折扣权重，换来 PCR 的对局吞吐
 
   # ---------------- 检查点 ----------------
   checkpoint:

@@ -63,7 +63,7 @@ _ZERO_STATS = TrainStepStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: float = 0.999,
                health_enabled: bool = False, health_loss_weight: float = 0.0,
                health_gauss_sigma: float = 1.5, value_dist_enabled: bool = False,
-               value_gauss_sigma: float = 1.5) -> TrainStepStats:
+               value_gauss_sigma: float = 1.5, fast_sample_weight: float = 0.0) -> TrainStepStats:
     model.train()
     boards_t, scalars_t, target_probs_t, target_values_t, masks_t, full_t, target_health_bin_t = batch_data
 
@@ -76,8 +76,13 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
     full_t = full_t.to(device, non_blocking=True).float()
     target_health_bin_t = target_health_bin_t.to(device, non_blocking=True).long().view(-1)
 
-    # ---- 选择性使用：batch 内无 Full Search 样本则不训练（Fast 样本仅保留供未来逻辑）----
-    if bool(full_t.sum() == 0):
+    # ---- 样本权重：Full = 1.0，Fast = fast_sample_weight（0 = Fast 完全不参与）----
+    # 算力随机化（PCR）下 Fast 步占 1-FULL_SEARCH_PROB；若把 Fast 样本一律当 0 权重，
+    # PCR 换来的对局吞吐会被「可训练样本只剩 25%」抵消。给折扣权重即可用同一批算力
+    # 换到更多（搜索较浅、质量略低）的梯度信号。
+    weight_t = full_t + fast_sample_weight * (1.0 - full_t)
+    weight_sum = weight_t.sum()
+    if bool(weight_sum <= 0.0):
         return _ZERO_STATS
 
     # ---- 数据有效性（非有限/非法策略）已由 DataBuffer.add_samples 入队时
@@ -96,10 +101,9 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
     # 配合下方梯度有限性检查，从源头杜绝 NaN 传播。
     masked_logits = logits.masked_fill(masks_t < 0.5, -1e9)
     log_probs = F.log_softmax(masked_logits, dim=1)
-    # 选择性使用：仅让 Full Search 样本参与策略/价值 loss（Fast 样本按 0 权重屏蔽）
-    num_full = full_t.sum().clamp_min(1.0)
+    # 按样本权重加权：Full 全额、Fast 折扣（fast_sample_weight=0 时退化为旧行为）
     per_sample_policy = -(target_probs_t * log_probs).sum(dim=1)  # (B,)
-    policy_loss = (per_sample_policy * full_t).sum() / num_full
+    policy_loss = (per_sample_policy * weight_t).sum() / weight_sum
     if value_dist_enabled:
         # ---- 分布化价值：HL-Gauss 高斯标签平滑交叉熵（与血量头同口径）----
         # 目标为归一化价值 v∈[-1,1] 映射到的连续桶位置上的高斯分布，模型输出
@@ -114,16 +118,16 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
         ).sum(dim=1)
     else:
         per_sample_value = F.mse_loss(values, target_values_t, reduction="none").view(-1)
-    value_loss = (per_sample_value * full_t).sum() / num_full
+    value_loss = (per_sample_value * weight_t).sum() / weight_sum
     total_loss = policy_loss + value_loss
 
-    # ---- 血量头：HL-Gauss (高斯标签平滑交叉熵/KL散度，仅启用时)，权重 α 缩放，Fast 样本按 0 权重屏蔽 ----
+    # ---- 血量头：HL-Gauss (高斯标签平滑交叉熵/KL散度，仅启用时)，权重 α 缩放，同样按样本权重加权 ----
     health_loss = torch.tensor(0.0, device=device)
     if health_enabled:
         log_health_probs = F.log_softmax(health_logits, dim=1)
         target_health_dist = make_hl_gauss_target(target_health_bin_t, health_logits.size(1), sigma=health_gauss_sigma)
         per_sample_health = F.kl_div(log_health_probs, target_health_dist, reduction="none").sum(dim=1)
-        health_loss = (per_sample_health * full_t).sum() / num_full
+        health_loss = (per_sample_health * weight_t).sum() / weight_sum
         total_loss = total_loss + health_loss_weight * health_loss
 
     # ---- 数值安全：loss / 梯度非有限直接抛出（不静默跳过 batch）----
@@ -183,7 +187,8 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                         ema_model=None, ema_decay: float = 0.999,
                         health_enabled: bool = False, health_loss_weight: float = 0.0,
                         health_gauss_sigma: float = 1.5,
-                        value_dist_enabled: bool = False, value_gauss_sigma: float = 1.5):
+                        value_dist_enabled: bool = False, value_gauss_sigma: float = 1.5,
+                        fast_sample_weight: float = 0.0):
     """
     在完整 replay buffer 上训练指定个 epoch。
     scheduler.step() 按 batch 步进以匹配 CosineAnnealingLR 的 T_max (batch 数)。
@@ -231,7 +236,8 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                            health_loss_weight=health_loss_weight,
                            health_gauss_sigma=health_gauss_sigma,
                            value_dist_enabled=value_dist_enabled,
-                           value_gauss_sigma=value_gauss_sigma)
+                           value_gauss_sigma=value_gauss_sigma,
+                           fast_sample_weight=fast_sample_weight)
             scheduler.step()
             batch_total_l += s.total
             batch_pol_l += s.policy

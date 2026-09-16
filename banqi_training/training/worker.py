@@ -469,6 +469,7 @@ class TrainWorker(threading.Thread):
                 health_gauss_sigma=cfg.HEALTH_GAUSS_SIGMA,
                 value_dist_enabled=self.value_dist_enabled,
                 value_gauss_sigma=cfg.VALUE_GAUSS_SIGMA,
+                fast_sample_weight=cfg.FAST_SAMPLE_LOSS_WEIGHT,
             )
             self.model.eval()
 

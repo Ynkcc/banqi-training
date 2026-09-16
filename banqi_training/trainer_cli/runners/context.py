@@ -192,6 +192,7 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
         "data_augment": config.DATA_AUGMENT_ENABLED,
         "data_augment_k": config.DATA_AUGMENT_K,
         "min_new_samples_to_train": config.MIN_NEW_SAMPLES_TO_TRAIN,
+        "fast_sample_loss_weight": config.FAST_SAMPLE_LOSS_WEIGHT,
         "eval_match_rounds": config.EVAL_MATCH_ROUNDS,
         "eval_match_games": config.EVAL_MATCH_GAMES,
         "eval_match_opponents": config.EVAL_MATCH_OPPONENTS,
