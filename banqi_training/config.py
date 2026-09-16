@@ -411,8 +411,8 @@ class Config:
     # 交叉熵；导出的 value 输出为分布期望 Σp_i·c_i（形状仍 [B,1]，Rust 契约不变）。
     # VALUE_DIST_ENABLED=false 时模型结构与旧版逐位等价。
     VALUE_DIST_ENABLED: bool = False       # 是否启用分布化价值头（value loss: MSE → HL-Gauss CE）
-    VALUE_DIST_BINS: int = 65              # 价值分桶数（须为 ≥3 的奇数，保证存在 0 中心桶）
-    VALUE_GAUSS_SIGMA: float = 1.5         # 价值 HL-Gauss 标签平滑高斯标准差（桶）
+    VALUE_DIST_BINS: int = 65              # 价值分桶数（须为 ≥3 的奇数；3 = WDL 三分类，65 = 细粒度分布）
+    VALUE_GAUSS_SIGMA: float = 0.05        # 价值 HL-Gauss 平滑标准差（价值单位，∈(0,1]；内部按桶数换算）
     # ============ 采样与增强节流（可选，带默认值向后兼容） ============
     DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
     MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)

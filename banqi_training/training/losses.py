@@ -30,8 +30,10 @@ def make_hl_gauss_target(target_bins: torch.Tensor, num_classes: int, sigma: flo
 
     target_bins 支持**连续桶位置**（浮点，如分布化价值头的 v→p 映射结果）与整型桶
     索引，两者共用同一条高斯加权路径：整数标签即「位置恰好落在桶心上」的特例。
-    sigma 单位为桶（相邻桶间距 = 1）。
+    sigma 单位为桶（相邻桶间距 = 1），必须 > 0（0 会让 d/σ 变成 NaN）。
     """
+    if sigma <= 0.0:
+        raise ValueError(f"HL-Gauss sigma 必须 > 0（单位：桶）: {sigma}")
     bins = torch.arange(num_classes, device=target_bins.device, dtype=torch.float32).unsqueeze(0)
     targets = target_bins.unsqueeze(1).float()
     weights = torch.exp(-0.5 * ((bins - targets) / sigma) ** 2)
@@ -49,6 +51,16 @@ def value_target_to_bin_position(values: torch.Tensor, num_classes: int) -> torc
     return pos
 
 
+def value_sigma_to_bins(sigma_value: float, num_classes: int) -> float:
+    """价值单位的平滑宽度 → 桶单位。
+
+    桶宽 = 2/(K-1)，故 sigma_bins = sigma_value·(K-1)/2。必须在桶数变化时同步换算，
+    否则 `VALUE_DIST_BINS` 会隐式改变平滑强度（K=3 时 1.5 桶 = 75% 值域，
+    K=65 时仅 2.3%），使 K 从「分辨率旋钮」变成「正则化旋钮」，实验结论失真。
+    """
+    return sigma_value * (num_classes - 1) * 0.5
+
+
 # 单 batch 训练统计（供 TensorBoard 记录）：
 #   total/policy/value/health：四类 loss；grad_norm：clip 前梯度范数（发散预警）；
 #   entropy：目标策略平均熵（探索健康度）；value_mean/std：价值目标分布。
@@ -62,7 +74,7 @@ TrainStepStats = namedtuple(
 def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: float = 0.999,
                health_enabled: bool = False, health_loss_weight: float = 0.0,
                health_gauss_sigma: float = 1.5, value_dist_enabled: bool = False,
-               value_gauss_sigma: float = 1.5, fast_sample_weight: float = 0.0) -> Optional[TrainStepStats]:
+               value_gauss_sigma: float = 0.05, fast_sample_weight: float = 0.0) -> Optional[TrainStepStats]:
     """单 batch 前向/反向。
 
     返回 None 表示本 batch 无有效样本（weight_sum == 0，例如批次内全为 Fast 样本且
@@ -114,10 +126,12 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
         # ---- 分布化价值：HL-Gauss 高斯标签平滑交叉熵（与血量头同口径）----
         # 目标为归一化价值 v∈[-1,1] 映射到的连续桶位置上的高斯分布，模型输出
         # 经 softmax 求期望即为 value（导出口径一致）。
+        # sigma 以价值单位给出、按桶数换算：K=3 时退化为 WDL 三分类 CE。
+        n_bins = value_logits.size(1)
         log_value_probs = F.log_softmax(value_logits, dim=1)
         target_value_dist = make_hl_gauss_target(
-            value_target_to_bin_position(target_values_t.view(-1), value_logits.size(1)),
-            value_logits.size(1), sigma=value_gauss_sigma,
+            value_target_to_bin_position(target_values_t.view(-1), n_bins),
+            n_bins, sigma=value_sigma_to_bins(value_gauss_sigma, n_bins),
         )
         per_sample_value = F.kl_div(
             log_value_probs, target_value_dist, reduction="none"
@@ -193,7 +207,7 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                         ema_model=None, ema_decay: float = 0.999,
                         health_enabled: bool = False, health_loss_weight: float = 0.0,
                         health_gauss_sigma: float = 1.5,
-                        value_dist_enabled: bool = False, value_gauss_sigma: float = 1.5,
+                        value_dist_enabled: bool = False, value_gauss_sigma: float = 0.05,
                         fast_sample_weight: float = 0.0):
     """
     在完整 replay buffer 上训练指定个 epoch。
