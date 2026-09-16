@@ -117,6 +117,12 @@ def _decode_episode(rec: "scheduler_pb2.EpisodeRecord") -> Dict[str, Any]:
     boards = _decode_bits(rec.boards_bits, steps * channels, positions, "棋盘位平面")
     masks = _decode_bits(rec.action_masks_bits, steps, action_space, "动作掩码")
 
+    # 局面快照（reanalysis 侧信道）：空 = 本批未收集（None）；非空必须与步数严格对齐，
+    # 否则重搜会把目标写到错误的位置上，宁可丢一批。
+    snapshots = [bytes(s) for s in rec.positions]
+    if snapshots and len(snapshots) != steps:
+        raise ValueError(f"局面快照数 {len(snapshots)} 与样本数 {steps} 不一致")
+
     return {
         "num_samples": steps,
         "game_length": int(rec.game_length),
@@ -133,6 +139,7 @@ def _decode_episode(rec: "scheduler_pb2.EpisodeRecord") -> Dict[str, Any]:
         "root_visits": _u32(rec.root_visits, steps, "根访问次数"),
         "actions": _u32(rec.actions, steps, "动作索引"),
         "is_full_search": _u8(rec.is_full_search, steps, "Full Search 标记").astype(bool),
+        "positions": snapshots or None,
     }
 
 
