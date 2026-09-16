@@ -11,7 +11,7 @@ import os
 import time
 import threading
 from collections import deque
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.optim as optim
@@ -26,6 +26,7 @@ from .augment import EpisodeAugmenter
 from .buffer import DataBuffer, episode_to_samples
 from .losses import run_training_epochs, _resolve_device
 from .lr_schedule import is_stopped, make_cosine_clamp_scheduler, resolve_lr_decay_batches
+from banqi_training.reanalysis import PositionPool, encode_payload
 from .eval import (
     build_fixed_eval,
     eval_policy_accuracy,
@@ -46,6 +47,7 @@ class TrainWorker(threading.Thread):
         device=None,
         run_dir: Optional[str] = None,
         ckpt_events: Optional[List[threading.Event]] = None,
+        reanalysis_submitter: Optional[Callable[[str, int, bytes, int], Tuple[bool, str]]] = None,
     ):
         """标准签名：(variant, cfg, data_queue, stop_event, ...)。
 
@@ -53,6 +55,9 @@ class TrainWorker(threading.Thread):
         (data_q, stop_event, variant) 调用顺序请使用 from_legacy 类方法。
         ckpt_events: 可选的旁路事件列表（NnueDistillWorker / ExpectimaxSidecar），
         每次 checkpoint 实际落盘后逐个 set。
+        reanalysis_submitter: 局面重搜提交回调 `(variant, mcts_sims, payload, positions)
+        -> (accepted, message)`；REANALYSIS_ENABLED=true 时必须提供（缺失即报错，
+        不静默跳过整个特性）。
         """
         super().__init__(name=f"TrainWorker-{variant.id}", daemon=True)
         self.variant = variant
@@ -71,6 +76,17 @@ class TrainWorker(threading.Thread):
         self.value_dist_bins = int(cfg.VALUE_DIST_BINS)
         # 空间对称增强（纯 Python，动作置换表带缓存）
         self.augmenter = EpisodeAugmenter(variant, cfg)
+        # 局面重搜位置池（reanalysis）：位置来自 episode 的快照侧信道（collector 采集）。
+        # 启用但没给提交回调属于配置错误（跑起来才发现提交不了最费时间），直接失败。
+        self.reanalysis_submitter = reanalysis_submitter
+        self.reanalysis_pool: Optional[PositionPool] = None
+        if cfg.REANALYSIS_ENABLED:
+            if reanalysis_submitter is None:
+                raise ValueError(
+                    "[TR] REANALYSIS_ENABLED=true 但未提供 reanalysis_submitter："
+                    "该特性需要连调度器的分布式 runner，请改用分布式形态或关闭 REANALYSIS_ENABLED"
+                )
+            self.reanalysis_pool = PositionPool(int(cfg.REANALYSIS_POOL_SIZE))
         os.makedirs(self.ckpt_dir, exist_ok=True)
 
         # 监控：每轮训练时长、最近 ckpt 路径、最近一次 epoch loss 分解
@@ -433,6 +449,10 @@ class TrainWorker(threading.Thread):
                 break
 
             t0 = time.time()
+            # 局面重搜：只收**原始** episode 的快照 —— 增强副本的棋盘已做对称变换，
+            # 其快照与实际局面不符，收进去会用错局面重搜。
+            if self.reanalysis_pool is not None:
+                self.reanalysis_pool.add_episode(episode_dict)
             # 空间对称增强（关闭时原样返回）
             episode_dicts = self._maybe_augment(episode_dict)
             samples: List[Dict] = []
@@ -561,6 +581,7 @@ class TrainWorker(threading.Thread):
 
             self.save_checkpoint(new_samples=new_samples, total_samples=total_samples,
                                  round_idx=round_idx)
+            self._maybe_submit_reanalysis(round_idx)
             version += 1
             self.version = version
             # 周期内存维护：强制 GC + glibc arena 归还（防 RSS 线性增长）
@@ -575,6 +596,48 @@ class TrainWorker(threading.Thread):
         # 预热阶段（样本不足）也定期保存，避免长期无 checkpoint
         if round_idx % 10 == 0 and not os.path.exists(self.last_ckpt_path()):
             self.save_checkpoint(round_idx=round_idx)
+
+    def _maybe_submit_reanalysis(self, round_idx: int) -> None:
+        """按周期把位置池里的历史局面打包提交给调度器（提交成功才移出池子）。
+
+        位置池是「先攒后交」：不足一批就继续攒（避免提交过小载荷）；提交被拒
+        （调度器未启用 / 队列满）或 RPC 失败时保留在池中，下一轮重试，不丢数据。
+        """
+        pool = self.reanalysis_pool
+        if pool is None:
+            return
+        every = max(int(self.cfg.REANALYSIS_SUBMIT_EVERY_N_ROUNDS), 1)
+        if round_idx % every != 0:
+            return
+        stats = pool.take_stats()
+        batch = max(int(self.cfg.REANALYSIS_BATCH_POSITIONS), 1)
+        skipped = (
+            f"；本轮跳过：无快照 {stats.skipped_no_positions} 局（collector 是否开了 collect_positions？）"
+            f" / 无胜负 {stats.skipped_no_winner} 局"
+            if (stats.skipped_no_positions or stats.skipped_no_winner)
+            else ""
+        )
+        items = pool.peek(batch)
+        if len(items) < batch:
+            print(f"[TR-{self.variant.id}] 🔁 重搜位置池 {len(pool)}/{pool.capacity}"
+                  f"（不足一批 {batch}，继续攒）{skipped}")
+            return
+
+        payload = encode_payload(items)
+        try:
+            accepted, message = self.reanalysis_submitter(
+                self.variant.id, int(self.cfg.REANALYSIS_MCTS_SIMS), payload, len(items)
+            )
+        except Exception as exc:  # noqa: BLE001 - 网络抖动不应终止训练：位置留在池中下轮重试
+            print(f"[TR-{self.variant.id}] ⚠️ 重搜提交异常（{exc}），{len(items)} 个位置保留待重试")
+            return
+        if accepted:
+            pool.drop_front(len(items))
+            print(f"[TR-{self.variant.id}] 🔁 已提交 {len(items)} 个局面重搜"
+                  f"（池内剩余 {len(pool)}）{skipped}")
+        else:
+            print(f"[TR-{self.variant.id}] ⚠️ 重搜提交被拒（{message}），"
+                  f"{len(items)} 个位置保留待重试{skipped}")
 
     def _maintain_memory(self, force: bool = False) -> None:
         """周期内存维护：手动 GC + 堆内存空闲页释放。"""

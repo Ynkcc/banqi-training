@@ -86,7 +86,10 @@ def run_distributed(variant_id: str) -> None:
     thread_stop = threading.Event()
     # 先构造 TrainWorker（构造期导出冷启动初始模型），再让 publisher 监听它实际
     # 写出的 onnx 路径：启用血量头时是 last_health.onnx，与 config.ONNX_PATH 不同。
-    train_worker = TrainWorker(variant, config, counting_q, thread_stop)
+    train_worker = TrainWorker(
+        variant, config, counting_q, thread_stop,
+        reanalysis_submitter=store.submit_reanalysis,
+    )
     onnx_path = train_worker.onnx_path()
     sep = "=" * 56
     print(sep)

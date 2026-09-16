@@ -94,6 +94,27 @@ class SchedulerEpisodeStore:
         with urllib.request.urlopen(url, timeout=120) as resp:
             return resp.read()
 
+    # ---- 局面重搜提交端（trainer → 调度器 → 任意 collector） ----
+
+    def submit_reanalysis(
+        self, variant: str, mcts_sims: int, payload: bytes, positions: int, requester: str = ""
+    ) -> tuple[bool, str]:
+        """提交一批待重搜局面；返回 (是否接受, 说明)。
+
+        调度器侧异步入队（不阻塞训练循环），由 GetTask 按节流下发给任意 worker。
+        拒绝情形（未启用 / 队列满 / 变体不符）返回 accepted=False，调用方保留位置重试。
+        """
+        reply = self._stub.SubmitReanalysis(
+            self._pb2.SubmitReanalysisRequest(
+                requester=requester or "trainer",
+                variant=variant,
+                mcts_sims=int(mcts_sims),
+                positions=int(positions),
+                payload=payload,
+            )
+        )
+        return bool(reply.accepted), reply.message
+
     def iter_new_episodes(self) -> Iterator[Dict[str, Any]]:
         while True:
             while self._buffered:

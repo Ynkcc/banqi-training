@@ -422,6 +422,15 @@ class Config:
     # （见 batches_per_round）自动折算成 batch 步数，随节流阈值 / TRAIN_BATCH /
     # TRAIN_EPOCHS_PER_ROUND 的变化保持一致；=0 时沿用 LR_DECAY_STEPS（按 batch 计）。
     LR_DECAY_ROUNDS: int = 0
+    # ============ 局面重搜（reanalysis，可选） ============
+    # 把 episode 里携带的历史局面攒进有界位置池，周期性提交给调度器，由 collector 用
+    # 当前 best 网络重跑 MCTS 刷新策略/价值目标（详见 banqi_training/reanalysis.py）。
+    # 前置条件：collector 侧开启 collect_positions，否则收到的 episode 不带快照。
+    REANALYSIS_ENABLED: bool = False          # 是否启用（关闭时不做任何池化与提交）
+    REANALYSIS_POOL_SIZE: int = 20000         # 位置池容量（按位置条数，FIFO 淘汰最旧）
+    REANALYSIS_BATCH_POSITIONS: int = 256     # 每次提交的位置条数（不足则继续攒）
+    REANALYSIS_SUBMIT_EVERY_N_ROUNDS: int = 10  # 每 N 轮尝试提交一次
+    REANALYSIS_MCTS_SIMS: int = 0             # 重搜模拟次数；0 = 用 collector 自对弈配置的默认值
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

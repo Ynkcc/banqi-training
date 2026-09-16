@@ -79,6 +79,11 @@ class SchedulerServiceStub(object):
                 request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.SerializeToString,
                 response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.FromString,
                 _registered_method=True)
+        self.SubmitReanalysis = channel.unary_unary(
+                '/scheduler.SchedulerService/SubmitReanalysis',
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.FromString,
+                _registered_method=True)
 
 
 class SchedulerServiceServicer(object):
@@ -138,6 +143,13 @@ class SchedulerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SubmitReanalysis(self, request, context):
+        """trainer 提交局面重搜任务（异步：入队后由 GetTask 分发给任意 worker）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SchedulerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -185,6 +197,11 @@ def add_SchedulerServiceServicer_to_server(servicer, server):
                     servicer.ListEpisodes,
                     request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.FromString,
                     response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.SerializeToString,
+            ),
+            'SubmitReanalysis': grpc.unary_unary_rpc_method_handler(
+                    servicer.SubmitReanalysis,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -430,6 +447,33 @@ class SchedulerService(object):
             '/scheduler.SchedulerService/ListEpisodes',
             banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesRequest.SerializeToString,
             banqi__training_dot_proto_dot_scheduler__pb2.ListEpisodesReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubmitReanalysis(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/scheduler.SchedulerService/SubmitReanalysis',
+            banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.FromString,
             options,
             channel_credentials,
             insecure,

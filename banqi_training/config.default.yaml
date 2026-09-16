@@ -76,6 +76,18 @@ common:
     FAST_SAMPLE_LOSS_WEIGHT: 0.0  # Fast Search 样本的 loss 权重（0=不参与，即旧行为；Full 恒为 1.0）
                                   # 配合 PLAYOUT_CAP_RANDOM_ENABLED 使用：给 Fast 样本折扣权重，换来 PCR 的对局吞吐
 
+  # ---------------- 局面重搜 reanalysis（可选） ----------------
+  # 把 episode 携带的历史局面攒进位置池，周期性提交给调度器（SubmitReanalysis），
+  # 由 collector 用当前 best 网络重跑 MCTS 刷新策略/价值目标。
+  # 前置条件：collector 的 selfplay.collect_positions=true（否则 episode 不带快照）、
+  # 调度器 SCHEDULER_REANALYSIS_INTERVAL_TASKS>0（否则提交被拒）。
+  reanalysis:
+    REANALYSIS_ENABLED: false          # 是否启用（关闭时不做任何池化与提交）
+    REANALYSIS_POOL_SIZE: 20000        # 位置池容量（按位置条数，FIFO 淘汰最旧）
+    REANALYSIS_BATCH_POSITIONS: 256    # 每次提交的位置条数（不足则继续攒）
+    REANALYSIS_SUBMIT_EVERY_N_ROUNDS: 10  # 每 N 轮尝试提交一次
+    REANALYSIS_MCTS_SIMS: 0            # 重搜模拟次数；0 = 用 collector 自对弈配置的默认值
+
   # ---------------- 检查点 ----------------
   checkpoint:
     CKPT_SAVE_EVERY: 1            # 完整 checkpoint (.pth) 落盘间隔轮次
