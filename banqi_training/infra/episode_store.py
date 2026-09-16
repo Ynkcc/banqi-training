@@ -13,7 +13,7 @@ import time
 from collections import deque
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Protocol
 
-from banqi_training.episode_codec import decode_episode_batch
+from banqi_training.episode_codec import DATA_RESNET, decode_episode_batch
 
 
 class EpisodeStore(Protocol):
@@ -37,6 +37,8 @@ class SchedulerEpisodeStore:
     仅需 SCHEDULER_ENDPOINT。
 
     variant 非空时校验每条记录的变体标签，防止跨变体数据混入训练。
+    kind 为消费的数据类别（默认 ResNet）：既用于服务端按类别过滤（不下载消费不了
+    的对象），也用于客户端解码校验（类别不符即抛错）。
     """
 
     PAGE_LIMIT = 200
@@ -44,6 +46,7 @@ class SchedulerEpisodeStore:
     def __init__(
         self,
         variant: Optional[str] = None,
+        kind: int = DATA_RESNET,
         endpoint: Optional[str] = None,
         poll_interval: float = 5.0,
     ) -> None:
@@ -52,6 +55,7 @@ class SchedulerEpisodeStore:
         from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
 
         self.variant = variant
+        self.kind = kind
         self.endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
         self.poll_interval = poll_interval
         self._pb2 = scheduler_pb2
@@ -74,7 +78,9 @@ class SchedulerEpisodeStore:
 
     def _list_page(self) -> None:
         reply = self._stub.ListEpisodes(
-            self._pb2.ListEpisodesRequest(after_key=self._cursor, limit=self.PAGE_LIMIT)
+            self._pb2.ListEpisodesRequest(
+                after_key=self._cursor, limit=self.PAGE_LIMIT, kind=self.kind
+            )
         )
         for obj in reply.objects:
             self._pending.append((obj.object_key, obj.download_url))
@@ -99,15 +105,12 @@ class SchedulerEpisodeStore:
             key, url = self._pending.pop(0)
             try:
                 batch = decode_episode_batch(
-                    gzip.decompress(self._download(url)), expect_variant=self.variant
+                    gzip.decompress(self._download(url)),
+                    expect_variant=self.variant,
+                    expect_kind=self.kind,
                 )
                 # 解码顺序即样本顺序：先缓冲完本对象，再逐条交给调用方
-                self._buffered.extend(batch.episodes)
-                if batch.nnue_episodes:
-                    print(
-                        f"[EpisodeStore] ⚠️ 对象 {key} 含 {len(batch.nnue_episodes)} 局 "
-                        f"NNUE 专属 episode，本训练端暂未消费（NNUE 蒸馏未接通），已丢弃"
-                    )
+                self._buffered.extend(batch.records)
             except Exception as exc:
                 print(f"[EpisodeStore] ⚠️ 跳过无法解码的对象 {key}: {exc}")
 

@@ -18,6 +18,7 @@ import time
 from typing import Optional
 
 from banqi_training.config import Config, make_config
+from banqi_training.episode_codec import DATA_RESNET, kind_name
 from banqi_training.infra import ModelRegistry, SchedulerEpisodeStore, SchedulerModelRegistry
 from banqi_training.memory_guard import start_memory_guard
 from banqi_training.tb_logger import close_summary_writer, init_summary_writer
@@ -77,7 +78,8 @@ def run_distributed(variant_id: str) -> None:
 
     start_memory_guard()
 
-    store = SchedulerEpisodeStore(variant=variant_id)
+    # 主闭环只消费 ResNet（Gumbel MCTS）数据；NNUE 数据走独立的蒸馏消费方
+    store = SchedulerEpisodeStore(variant=variant_id, kind=DATA_RESNET)
     registry = SchedulerModelRegistry()
     counting_q = CountingQueue(store)
 
@@ -89,7 +91,10 @@ def run_distributed(variant_id: str) -> None:
     sep = "=" * 56
     print(sep)
     print(f"  🚀 分布式 Trainer 启动（变体 {variant_id}，无 Collector）")
-    print(f"  EPISODE_SOURCE = scheduler ListEpisodes（预签名 GET 拉取）")
+    print(
+        f"  EPISODE_SOURCE = scheduler ListEpisodes（预签名 GET 拉取，"
+        f"类别 {kind_name(DATA_RESNET)}）"
+    )
     print(f"  SCHEDULER      = {registry.endpoint}（SignNetworkUpload + RegisterNetwork）")
     print(f"  WATCH ONNX     = {onnx_path}")
     print(sep)

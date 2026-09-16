@@ -54,6 +54,11 @@ tests/test_episode_codec.py  episode 记录解码单测（位平面布局 / 张�
 `episode_codec.decode_episode_batch` 解码为 numpy 张量（棋盘位平面 / 掩码位图位打包，
 标量策略等走稠密小端缓冲）。版本不认识、变体不符、长度不符一律抛错，不静默降级。
 
+数据类别：`EpisodeBatch.kind` 区分 `resnet`（Gumbel MCTS 稠密特征）与 `nnue`
+（Expectimax 稀疏特征），两类互斥。主闭环只消费 `resnet`（`SchedulerEpisodeStore`
+的 `kind` 参数既用于服务端 `ListEpisodes` 过滤，也用于解码校验）；NNUE 数据由
+独立的蒸馏消费方处理（尚未接通）。
+
 ## 与其他仓库的关系
 
 - `banqi-scheduler`：gRPC 契约（`proto/scheduler.proto`）；proto 变更先改 scheduler 仓库再复制过来重新生成 pb2

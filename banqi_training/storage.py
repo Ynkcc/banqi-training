@@ -30,27 +30,34 @@ def list_episode_objects(archive_dir: str) -> List[str]:
     )
 
 
-def iter_episodes_from_dir(archive_dir: str, variant: Optional[str] = None) -> Iterator[Dict]:
-    """流式迭代归档目录中的 episode dict（逐个对象解码，不一次性物化全部）。
+def iter_episodes_from_dir(
+    archive_dir: str, variant: Optional[str] = None, kind: Optional[int] = None
+) -> Iterator[Dict]:
+    """流式迭代归档目录中的 episode 记录（逐个对象解码，不一次性物化全部）。
 
-    单个对象损坏/版本不兼容时跳过并告警，不中断整批加载。
+    单个对象损坏 / 版本或类别不兼容时跳过并告警，不中断整批加载。
     """
     for path in list_episode_objects(archive_dir):
         try:
             with open(path, "rb") as f:
-                batch = decode_episode_batch(gzip.decompress(f.read()), expect_variant=variant)
+                batch = decode_episode_batch(
+                    gzip.decompress(f.read()), expect_variant=variant, expect_kind=kind
+                )
         except Exception as exc:  # noqa: BLE001
             print(f"[storage] ⚠️ 跳过无法解码的归档对象 {path}: {exc}")
             continue
-        yield from batch.episodes
+        yield from batch.records
 
 
 def load_episodes_from_dir(
-    archive_dir: str, limit_games: Optional[int] = None, variant: Optional[str] = None
+    archive_dir: str,
+    limit_games: Optional[int] = None,
+    variant: Optional[str] = None,
+    kind: Optional[int] = None,
 ) -> List[Dict]:
-    """加载归档目录中的 episode dict 列表；limit_games 限制局数（控制内存与数据分布）。"""
+    """加载归档目录中的 episode 记录；limit_games 限制局数（控制内存与数据分布）。"""
     episodes: List[Dict] = []
-    for ep in iter_episodes_from_dir(archive_dir, variant=variant):
+    for ep in iter_episodes_from_dir(archive_dir, variant=variant, kind=kind):
         episodes.append(ep)
         if limit_games is not None and len(episodes) >= limit_games:
             break
