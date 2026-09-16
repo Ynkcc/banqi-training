@@ -171,7 +171,8 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
     )
     add_text(
         "meta/augment",
-        f"enabled={config.DATA_AUGMENT_ENABLED} transforms={config.DATA_AUGMENT_TRANSFORMS}",
+        f"enabled={config.DATA_AUGMENT_ENABLED} k={config.DATA_AUGMENT_K} "
+        f"transforms={config.DATA_AUGMENT_TRANSFORMS}",
         0,
     )
     hparams = {
@@ -189,6 +190,8 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
         "min_samples_to_start": config.MIN_SAMPLES_TO_START,
         "value_target": config.VALUE_TARGET_MODE,
         "data_augment": config.DATA_AUGMENT_ENABLED,
+        "data_augment_k": config.DATA_AUGMENT_K,
+        "min_new_samples_to_train": config.MIN_NEW_SAMPLES_TO_TRAIN,
         "eval_match_rounds": config.EVAL_MATCH_ROUNDS,
         "eval_match_games": config.EVAL_MATCH_GAMES,
         "eval_match_opponents": config.EVAL_MATCH_OPPONENTS,

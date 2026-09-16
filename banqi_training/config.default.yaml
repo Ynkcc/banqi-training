@@ -65,6 +65,9 @@ common:
     EMA_DECAY: 0.99               # EMA 滑动衰减率
     DATA_AUGMENT_ENABLED: true    # 是否启用数据增强
     DATA_AUGMENT_KEEP_ORIGINAL: true  # 是否保留原始样本
+    DATA_AUGMENT_K: 1             # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数，4x2/4x8=3、4x4=7）
+    MIN_NEW_SAMPLES_TO_TRAIN: 0   # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
+                                  # 它同时决定 LR 余弦的实际推进速率（scheduler 按 batch 步进），须与 LR_DECAY_STEPS 一起标定
     RECENT_SAMPLE_ENABLED: true   # 批量聚焦训练时启用「新近优先」采样
 
   # ---------------- 检查点 ----------------
@@ -111,8 +114,9 @@ common:
 
   # ---------------- 价值目标与漂移评估 ----------------
   value_target:
-    VALUE_TARGET_MODE: "game_hp"     # 价值目标模式（mcts/game/mixed/anneal/game_hp；mcts->game：向终局胜负真值学习）
+    VALUE_TARGET_MODE: "game_hp"     # 价值目标模式（mcts/game/completed_q/mixed/anneal/game_hp；mcts->game：向终局胜负真值学习）
                                   # game_hp：胜负用终局真值、平局改用终局子力差（4x2 平局占比过半，原目标恒为 0）
+                                  # completed_q：用所选动作的 Q(s,a)（与根 V 同量纲同视角，短搜索下偏差更小）
     VALUE_MIX_GAME_WEIGHT: 0.5    # mixed 模式的终局价值权重 λ：target=(1-λ)*mcts_value+λ*game_result
     VALUE_TARGET_ANNEAL_ROUNDS: 0 # value 目标退火总轮数（0=关闭）
     VALUE_ANNEAL_START: 0.2       # 价值退火起始系数
@@ -130,6 +134,16 @@ common:
     HEALTH_GAUSS_SIGMA: 1.5            # HL-Gauss 标签平滑高斯标准差（桶）
     HEALTH_UTILITY_WEIGHT: 0.15        # MCTS 复合效用中血量期望权重 λ（0=禁用血量影响搜索，P3 使用）
     HEALTH_UTILITY_CONFIDENCE_EXP: 0.0 # λ 随 |v_win| 的自适应幂指数；0=常量 λ（P3 使用）
+
+  # ---------------- 分布化价值头（离散分类，可选） ----------------
+  # value 头由「tanh 标量 + MSE」改为「K 桶分布 + HL-Gauss 交叉熵」：把归一化价值
+  # v∈[-1,1] 离散成 K 个等距桶，loss 用高斯标签平滑交叉熵；导出的 value 输出仍为
+  # [B,1]（= 分布期望 Σp_i·c_i），因此 Rust 侧 ONNX/TorchScript 契约不变。
+  # VALUE_DIST_ENABLED=false 时模型结构与旧版逐位等价。
+  value_dist:
+    VALUE_DIST_ENABLED: false   # 是否启用分布化价值头（value loss: MSE → HL-Gauss CE）
+    VALUE_DIST_BINS: 65         # 价值分桶数（须为 ≥3 的奇数，保证存在 0 中心桶）
+    VALUE_GAUSS_SIGMA: 1.5      # HL-Gauss 标签平滑高斯标准差（桶；间距=1）
 
   # ---------------- NNUE 蒸馏（主闭环旁路，可选） ----------------
   # 主闭环 MCTS 自对弈 episode 分流到 NnueDistillWorker：稀疏特征蒸馏训练

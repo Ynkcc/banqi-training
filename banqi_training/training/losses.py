@@ -26,16 +26,34 @@ def _resolve_device(spec: str) -> "torch.device":
 
 
 def make_hl_gauss_target(target_bins: torch.Tensor, num_classes: int, sigma: float = 1.5) -> torch.Tensor:
-    """由 1D 离散桶标签生成 HL-Gauss (Histogram Loss with Gaussian Label Smoothing) 高斯目标分布 (B, K)。"""
+    """由 1D 桶位置生成 HL-Gauss (Histogram Loss with Gaussian Label Smoothing) 高斯目标分布 (B, K)。
+
+    target_bins 支持**连续桶位置**（浮点，如分布化价值头的 v→p 映射结果）与整型桶
+    索引，两者共用同一条高斯加权路径：整数标签即「位置恰好落在桶心上」的特例。
+    sigma 单位为桶（相邻桶间距 = 1）。
+    """
     bins = torch.arange(num_classes, device=target_bins.device, dtype=torch.float32).unsqueeze(0)
     targets = target_bins.unsqueeze(1).float()
     weights = torch.exp(-0.5 * ((bins - targets) / sigma) ** 2)
     return weights / weights.sum(dim=1, keepdim=True)
 
 
+def value_target_to_bin_position(values: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """归一化价值 v∈[-1,1] → 连续桶位置 p=(v+1)·(K-1)/2 ∈ [0, K-1]（供 HL-Gauss 使用）。
+
+    桶心等距覆盖 [-1,1]（见 `nn_model.BanqiNet.value_centers`），与模型的
+    「softmax(logits)·桶心」期望值口径严格同源。越界目标就地截断到端点桶，
+    避免高斯权重整体落到桶外后被归一化成退化分布。
+    """
+    pos = (values.clamp(-1.0, 1.0) + 1.0) * (num_classes - 1) * 0.5
+    return pos
+
+
 # 单 batch 训练统计（供 TensorBoard 记录）：
 #   total/policy/value/health：四类 loss；grad_norm：clip 前梯度范数（发散预警）；
 #   entropy：目标策略平均熵（探索健康度）；value_mean/std：价值目标分布。
+#   注：value 在分布化模式下是 HL-Gauss 交叉熵（nats），与标量模式的 MSE 不同量纲，
+#   跨模式比较该列无意义（应用 value_drift/* 判断价值头质量）。
 TrainStepStats = namedtuple(
     "TrainStepStats", "total policy value health grad_norm entropy value_mean value_std"
 )
@@ -44,7 +62,8 @@ _ZERO_STATS = TrainStepStats(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: float = 0.999,
                health_enabled: bool = False, health_loss_weight: float = 0.0,
-               health_gauss_sigma: float = 1.5) -> TrainStepStats:
+               health_gauss_sigma: float = 1.5, value_dist_enabled: bool = False,
+               value_gauss_sigma: float = 1.5) -> TrainStepStats:
     model.train()
     boards_t, scalars_t, target_probs_t, target_values_t, masks_t, full_t, target_health_bin_t = batch_data
 
@@ -64,10 +83,12 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
     # ---- 数据有效性（非有限/非法策略）已由 DataBuffer.add_samples 入队时
     # 前置过滤，此处假定输入完全合法，不再做冗余防御校验。----
     optimizer.zero_grad()
-    if health_enabled:
-        logits, values, health_logits = model(boards_t, scalars_t)
-    else:
-        logits, values = model(boards_t, scalars_t)
+    # 分布化价值头需要额外的 value 分布 logits：按 [policy, value, (health), (value_logits)]
+    # 的顺序取尾元素（value_dist_enabled 时尾元素必为 value_logits）。
+    out = model(boards_t, scalars_t, value_dist_enabled)
+    logits, values = out[0], out[1]
+    health_logits = out[2] if health_enabled else None
+    value_logits = out[-1] if value_dist_enabled else None
 
     # ---- 安全 mask：用 -1e9 屏蔽非法动作（替代 (mask-1)*1e9）----
     # 原实现 logits + (mask-1)*1e9 在 logits 含 +inf 时会产生 inf -> log_softmax
@@ -79,7 +100,20 @@ def train_step(model, optimizer, batch_data, device, ema_model=None, ema_decay: 
     num_full = full_t.sum().clamp_min(1.0)
     per_sample_policy = -(target_probs_t * log_probs).sum(dim=1)  # (B,)
     policy_loss = (per_sample_policy * full_t).sum() / num_full
-    per_sample_value = F.mse_loss(values, target_values_t, reduction="none").view(-1)
+    if value_dist_enabled:
+        # ---- 分布化价值：HL-Gauss 高斯标签平滑交叉熵（与血量头同口径）----
+        # 目标为归一化价值 v∈[-1,1] 映射到的连续桶位置上的高斯分布，模型输出
+        # 经 softmax 求期望即为 value（导出口径一致）。
+        log_value_probs = F.log_softmax(value_logits, dim=1)
+        target_value_dist = make_hl_gauss_target(
+            value_target_to_bin_position(target_values_t.view(-1), value_logits.size(1)),
+            value_logits.size(1), sigma=value_gauss_sigma,
+        )
+        per_sample_value = F.kl_div(
+            log_value_probs, target_value_dist, reduction="none"
+        ).sum(dim=1)
+    else:
+        per_sample_value = F.mse_loss(values, target_values_t, reduction="none").view(-1)
     value_loss = (per_sample_value * full_t).sum() / num_full
     total_loss = policy_loss + value_loss
 
@@ -148,7 +182,8 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
                         device, max_batches: Optional[int] = None,
                         ema_model=None, ema_decay: float = 0.999,
                         health_enabled: bool = False, health_loss_weight: float = 0.0,
-                        health_gauss_sigma: float = 1.5):
+                        health_gauss_sigma: float = 1.5,
+                        value_dist_enabled: bool = False, value_gauss_sigma: float = 1.5):
     """
     在完整 replay buffer 上训练指定个 epoch。
     scheduler.step() 按 batch 步进以匹配 CosineAnnealingLR 的 T_max (batch 数)。
@@ -194,7 +229,9 @@ def run_training_epochs(model, optimizer, scheduler, buffer, num_epochs,
             s = train_step(model, optimizer, batch_data, device, ema_model=ema_model,
                            ema_decay=ema_decay, health_enabled=health_enabled,
                            health_loss_weight=health_loss_weight,
-                           health_gauss_sigma=health_gauss_sigma)
+                           health_gauss_sigma=health_gauss_sigma,
+                           value_dist_enabled=value_dist_enabled,
+                           value_gauss_sigma=value_gauss_sigma)
             scheduler.step()
             batch_total_l += s.total
             batch_pol_l += s.policy

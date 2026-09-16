@@ -48,9 +48,18 @@ def export_checkpoint_file(ckpt_path: str, variant_id: str | None = None) -> boo
     else:
         raise ValueError(f"无法识别的 checkpoint 格式: {type(ckpt)}")
 
-    # 由权重 key 检测是否带血量差异头（health_*），保证结构匹配
+    # 由权重 key / 形状检测结构开关，保证与 checkpoint 匹配：
+    #   - 血量差异头：存在 health_* 权重；
+    #   - 分布化价值头：value_fc2 输出维度 > 1（标量价值头为 1）。
     enable_health = any(k.startswith("health_") for k in state_dict)
-    model = BanqiNet(variant, enable_health=enable_health)
+    value_out_dim = int(state_dict["value_fc2.weight"].shape[0])
+    enable_value_dist = value_out_dim > 1
+    model = BanqiNet(
+        variant,
+        enable_health=enable_health,
+        enable_value_dist=enable_value_dist,
+        value_dist_bins=value_out_dim if enable_value_dist else 65,
+    )
     model.load_state_dict(state_dict)
     model.eval()
 

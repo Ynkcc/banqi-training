@@ -67,8 +67,9 @@ class EpisodeAugmenter:
 
         返回用于训练的 episode dict 列表：
           - DATA_AUGMENT_ENABLED=false：原样返回 [episode_dict]。
-          - 开启时：对每局按 DATA_AUGMENT_TRANSFORMS 随机抽一个非恒等变换，
-            生成增强副本；DATA_AUGMENT_KEEP_ORIGINAL=true 时保留原始局。
+          - 开启时：对每局按 DATA_AUGMENT_TRANSFORMS 随机抽 DATA_AUGMENT_K 个
+            （互不重复的）非恒等变换，生成增强副本；KEEP_ORIGINAL=true 时保留原始局。
+            K 越大，同一批自对弈局数喂入的梯度步越多（训练算力同步上升）。
         """
         cfg = self.cfg
         if not cfg.DATA_AUGMENT_ENABLED:
@@ -86,8 +87,9 @@ class EpisodeAugmenter:
         if not transform_list:
             return [episode_dict]
         keep = cfg.DATA_AUGMENT_KEEP_ORIGINAL
-        # 每局随机抽 1 个变换（训练侧增强多样性），并保留原始局
-        t = transform_list[random.randrange(len(transform_list))]
+        # 每局随机抽 K 个互不重复的变换（训练侧增强多样性），并保留原始局
+        k = max(1, min(int(cfg.DATA_AUGMENT_K), len(transform_list)))
+        picked = random.sample(transform_list, k)
         out = [episode_dict] if keep else []
-        out.append(self.transform_episode(episode_dict, t))
+        out.extend(self.transform_episode(episode_dict, t) for t in picked)
         return out

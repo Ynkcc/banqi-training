@@ -333,8 +333,9 @@ class Config:
     ARCHIVE_ENABLED: bool
     ARCHIVE_PREFILL_GAMES: int
     ARCHIVE_PREFILL_DIR: str
-    # 价值目标模式：mcts | game | mixed | anneal | game_hp
+    # 价值目标模式：mcts | game | completed_q | mixed | anneal | game_hp
     # game_hp = 胜负用 game_result 真值，平局改用终局子力差（∈[-1,1]，与胜负同量纲）
+    # completed_q = 所选动作的 completed_Q（根玩家视角），短搜索下比根 V 偏差更小
     VALUE_TARGET_MODE: str
     VALUE_TARGET_ANNEAL_ROUNDS: int  # value 目标退火总轮数（0=关闭）
     VALUE_ANNEAL_START: float
@@ -405,6 +406,16 @@ class Config:
     EVAL_MATCH_STOP_WIN_RATE: float = 0.0  # 达到该胜率时停止训练（0=关闭）
     EVAL_MATCH_STOP_OPPONENT: str = ""     # 停机判定的对手（空=任一对手达标即停）
     VALUE_MIX_GAME_WEIGHT: float = 0.5     # VALUE_TARGET_MODE=mixed 时终局价值的权重 λ
+    # ============ 分布化价值头（离散分类，可选；见 config.default.yaml 的 value_dist 段） ============
+    # value 头改为对归一化价值 v∈[-1,1] 的 K 桶分布，损失由 MSE 换为 HL-Gauss
+    # 交叉熵；导出的 value 输出为分布期望 Σp_i·c_i（形状仍 [B,1]，Rust 契约不变）。
+    # VALUE_DIST_ENABLED=false 时模型结构与旧版逐位等价。
+    VALUE_DIST_ENABLED: bool = False       # 是否启用分布化价值头（value loss: MSE → HL-Gauss CE）
+    VALUE_DIST_BINS: int = 65              # 价值分桶数（须为 ≥3 的奇数，保证存在 0 中心桶）
+    VALUE_GAUSS_SIGMA: float = 1.5         # 价值 HL-Gauss 标签平滑高斯标准差（桶）
+    # ============ 采样与增强节流（可选，带默认值向后兼容） ============
+    DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
+    MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

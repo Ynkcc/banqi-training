@@ -74,7 +74,7 @@ class DataBuffer:
         self.variant = variant
         self.cfg = cfg
         # value 目标模式白名单：拼写错误会静默退化为 mcts，实验结论随之失真
-        modes = {"mcts", "game", "mixed", "anneal", "game_hp"}
+        modes = {"mcts", "game", "completed_q", "mixed", "anneal", "game_hp"}
         if cfg.VALUE_TARGET_MODE not in modes:
             raise ValueError(
                 f"未知 VALUE_TARGET_MODE={cfg.VALUE_TARGET_MODE!r}，可选 {sorted(modes)}"
@@ -113,6 +113,9 @@ class DataBuffer:
         """按 value 目标模式计算训练 target：
           mcts   -> mcts_value（搜索/教师平滑评估，噪声小）
           game   -> game_result_value（AlphaZero 标准，终局真值 ±1）
+          completed_q -> completed_q（所选动作的 Q(s,a)，根玩家视角）。
+                    与 mcts_value（根 V = 子节点 Q 均值）同量纲、同视角；搜索次数少时
+                    Q(s,a) 比 V(s) 的偏差更小、方差更低，可直接作为 value 目标。
           mixed  -> (1-λ)*mcts_value + λ*game_result，λ = VALUE_MIX_GAME_WEIGHT
           anneal -> (1-w)*mcts_value + w*game_result，w 按轮退火
           game_hp-> 胜负用 game_result 真值，平局改用终局子力差（见 _draw_hp_target）。
@@ -123,6 +126,8 @@ class DataBuffer:
         gr = s.get('game_result_value', 0.0)
         if mode == "game":
             return float(gr)
+        if mode == "completed_q":
+            return float(s.get('completed_q', 0.0))
         if mode == "game_hp":
             gr = float(gr)
             return gr if gr != 0.0 else self._draw_hp_target(s.get('health_diff', 0.0))

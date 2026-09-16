@@ -65,6 +65,10 @@ class TrainWorker(threading.Thread):
         self.device = device or _resolve_device(cfg.TRAIN_DEVICE)
         # 血量差异价值头开关：开启时使用独立 _health 模型文件，与标准模型物理隔离。
         self.health_enabled = bool(cfg.HEALTH_VALUE_HEAD_ENABLED)
+        # 分布化价值头开关：开启时 value 头输出改为 K 桶分布（损失换成 HL-Gauss 交叉熵），
+        # 同样使用独立 _vdist 模型文件，避免与标准/血量头臂互相 resume。
+        self.value_dist_enabled = bool(cfg.VALUE_DIST_ENABLED)
+        self.value_dist_bins = int(cfg.VALUE_DIST_BINS)
         # 空间对称增强（纯 Python，动作置换表带缓存）
         self.augmenter = EpisodeAugmenter(variant, cfg)
         os.makedirs(self.ckpt_dir, exist_ok=True)
@@ -105,9 +109,23 @@ class TrainWorker(threading.Thread):
         v = variant_or_id if isinstance(variant_or_id, Variant) else get_variant(str(variant_or_id))
         return cls(v, make_config(v.id), data_queue, stop_event)
 
+    def _new_model(self):
+        """按当前开关构造同结构的 BanqiNet（训练模型 / EMA 影子模型共用）。
+
+        结构开关（血量头 / 分布化价值头）必须与 checkpoint、导出子进程完全一致，
+        否则 load_state_dict 会因参数形状不符直接失败。
+        """
+        from banqi_training.nn_model import BanqiNet
+
+        return BanqiNet(
+            self.variant,
+            enable_health=self.health_enabled,
+            enable_value_dist=self.value_dist_enabled,
+            value_dist_bins=self.value_dist_bins,
+        )
+
     def _init_model_and_checkpoint(self):
         cfg = self.cfg
-        from banqi_training.nn_model import BanqiNet
 
         ema_enabled = cfg.EMA_ENABLED
         ema_decay = float(cfg.EMA_DECAY)
@@ -118,11 +136,11 @@ class TrainWorker(threading.Thread):
         if os.path.exists(self.last_ckpt_path()):  # resume
             print(f"[TR-{self.variant.id}] 从 checkpoint 恢复: {self.last_ckpt_path()}")
             ckpt = torch.load(self.last_ckpt_path(), map_location=self.device, weights_only=False)
-            model = BanqiNet(self.variant, enable_health=self.health_enabled)
+            model = self._new_model()
             model.load_state_dict(ckpt["model_state"])
             self.model = model.to(self.device)
             if ema_enabled:
-                self.ema_model = BanqiNet(self.variant, enable_health=self.health_enabled).to(self.device)
+                self.ema_model = self._new_model().to(self.device)
                 if "ema_model_state" in ckpt and ckpt["ema_model_state"] is not None:
                     self.ema_model.load_state_dict(ckpt["ema_model_state"])
                 else:
@@ -144,9 +162,9 @@ class TrainWorker(threading.Thread):
             print(f"[TR-{self.variant.id}] 恢复 global_step={self.global_step}, "
                   f"version={self.version}" + (" (EMA 已启用)" if ema_enabled else ""))
         else:
-            self.model = BanqiNet(self.variant, enable_health=self.health_enabled).to(self.device)
+            self.model = self._new_model().to(self.device)
             if ema_enabled:
-                self.ema_model = BanqiNet(self.variant, enable_health=self.health_enabled).to(self.device)
+                self.ema_model = self._new_model().to(self.device)
                 self.ema_model.load_state_dict(self.model.state_dict())
             self.optimizer = optim.AdamW(
                 self.model.parameters(), lr=cfg.LEARNING_RATE,
@@ -203,16 +221,32 @@ class TrainWorker(threading.Thread):
         self.global_step = 0
         self.metrics["global_step"] = 0
 
+    def _model_stem(self) -> str:
+        """模型文件主干名：结构开关各自加后缀，实现 A/B 两臂的物理隔离。
+
+        隔离是必需的而非美化：两臂共用同一 ckpt 路径时，后启动的一臂会 resume
+        前一臂的权重（且因参数形状不同直接报错），实验结论随之失效。
+        """
+        stem = "last"
+        if self.health_enabled:
+            stem += "_health"
+        if self.value_dist_enabled:
+            stem += "_vdist"
+        return stem
+
     def _ckpt_path(self) -> str:
-        """checkpoint 路径（worker 内部，用于断点续训）：启用血量头时用独立后缀物理隔离。"""
-        return os.path.join(self.ckpt_dir, "last_health.ckpt" if self.health_enabled else "last.ckpt")
+        """checkpoint 路径（worker 内部，用于断点续训）。"""
+        return os.path.join(self.ckpt_dir, f"{self._model_stem()}.ckpt")
+
+    def _has_health_path_override(self) -> bool:
+        """是否沿用配置里的血量头专属导出路径（仅纯血量头臂，保持既有行为）。"""
+        return self.health_enabled and not self.value_dist_enabled
 
     def _pt_path(self) -> str:
         """TorchScript 模型导出路径（供自对弈推理）。"""
-        if self.health_enabled:
-            return (self.cfg.HEALTH_MODEL_PATH or
-                    os.path.join(self.ckpt_dir, "last_health.pt"))
-        return os.path.join(self.ckpt_dir, "last.pt")
+        if self._has_health_path_override() and self.cfg.HEALTH_MODEL_PATH:
+            return self.cfg.HEALTH_MODEL_PATH
+        return os.path.join(self.ckpt_dir, f"{self._model_stem()}.pt")
 
     def onnx_path(self) -> str:
         """ONNX 模型导出路径（供调度器 worker / gatekeeper 下载使用）。
@@ -220,10 +254,9 @@ class TrainWorker(threading.Thread):
         公开方法：分布式 runner 的 RegistryPublisher 必须监听与训练侧实际写出
         完全一致的路径（启用血量头时是 last_health.onnx）。
         """
-        if self.health_enabled:
-            return (self.cfg.HEALTH_ONNX_PATH or
-                    os.path.join(self.ckpt_dir, "last_health.onnx"))
-        return os.path.join(self.ckpt_dir, "last.onnx")
+        if self._has_health_path_override() and self.cfg.HEALTH_ONNX_PATH:
+            return self.cfg.HEALTH_ONNX_PATH
+        return os.path.join(self.ckpt_dir, f"{self._model_stem()}.onnx")
 
     def last_ckpt_path(self):
         return self._ckpt_path()
@@ -361,12 +394,17 @@ class TrainWorker(threading.Thread):
         total_samples = self.start_total_samples
         # 批量训练：自对弈数据逐局到达，单局样本量远小于一个合理训练批次。
         # 若每局立即训练，max_batches 会按单局样本量被压到极小，训练碎片化且
-        # 反复抽到旧数据。这里累积到足够新样本量（buffer 容量的 1/4）才训练一次，
-        # 让训练量充足且聚焦新数据（selfplay 与 rule_selfplay 统一该逻辑）。
+        # 反复抽到旧数据。这里累积到足够新样本量才训练一次，让训练量充足且聚焦新数据
+        # （selfplay 与 rule_selfplay 统一该逻辑）。阈值默认取 buffer 容量的 1/4，
+        # 可用 MIN_NEW_SAMPLES_TO_TRAIN 显式指定：它同时决定 LR 余弦的实际推进速率
+        # （scheduler 按 batch 步进），需与 LR_DECAY_STEPS 一起标定。
         capacity_base = cfg.MAX_SAMPLE_BUFFER_SIZE
-        batch_train_min_samples = max(
+        configured_min_new = int(cfg.MIN_NEW_SAMPLES_TO_TRAIN)
+        batch_train_min_samples = configured_min_new if configured_min_new > 0 else max(
             cfg.TRAIN_BATCH * cfg.TRAIN_EPOCHS_PER_ROUND, capacity_base // 4
         )
+        print(f"[TR-{self.variant.id}] 训练节流阈值={batch_train_min_samples} 新样本/轮"
+              f"（MIN_NEW_SAMPLES_TO_TRAIN={configured_min_new}，0=自动）")
         pending_samples = 0   # 累积待训练的新样本数
         # 训练轮次由 trainer 自己维护并单调递增：分布式形态下 episode 不携带轮次，
         # 轮次恒为 0 会让 save_checkpoint 的 should_export 恒为假（训练期永不导出
@@ -429,6 +467,8 @@ class TrainWorker(threading.Thread):
                 health_enabled=self.health_enabled,
                 health_loss_weight=cfg.HEALTH_LOSS_WEIGHT,
                 health_gauss_sigma=cfg.HEALTH_GAUSS_SIGMA,
+                value_dist_enabled=self.value_dist_enabled,
+                value_gauss_sigma=cfg.VALUE_GAUSS_SIGMA,
             )
             self.model.eval()
 
