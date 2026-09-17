@@ -390,7 +390,14 @@ class TrainWorker(threading.Thread):
             print(f"[TR-{self.variant.id}] value 目标退火 w={w:.3f} (round {round_idx})")
 
     def _ensure_fixed_eval_from_selfplay(self, samples: List[Dict]) -> None:
-        """无归档时，从本会话自对弈原始样本池中按终局结果分层构建固定验证集。"""
+        """无归档时，从自对弈原始样本池构建固定验证集。
+
+        池子**跨轮累积**：固定验证集是「价值/策略头随训练变化」的仪表，构建失败
+        （样本不足，或终局结果类别退化）不应把已攒的样本丢掉 —— 旧实现无论如何都清空
+        池子，于是每轮都用同一小批样本重建，退化时永远修不好（历史事故：验证集整批
+        同一类别 → corr(终局)/胜负区分度 恒为 0，268 轮无人发现）。
+        构建成功后清空池子：仪表只需建一次，之后局面固定才可比。
+        """
         if self._fixed_eval is not None:
             return
         n_fixed = self.cfg.VALUE_DRIFT_NUM_POSITIONS
@@ -399,16 +406,17 @@ class TrainWorker(threading.Thread):
         self._raw_sample_pool.extend(samples)
         if len(self._raw_sample_pool) < n_fixed:
             return
-        # 防止池子无限累积导致内存增长：设一个上限（n_fixed*2），超过即截断
-        max_pool = max(n_fixed * 2, 512)
+        # 有界池：上限放宽到 n_fixed*8（跨轮攒够两类终局样本），同时防止内存无界增长
+        max_pool = max(n_fixed * 8, 4096)
         if len(self._raw_sample_pool) > max_pool:
             self._raw_sample_pool = self._raw_sample_pool[-max_pool:]
         pool = select_balanced_fixed_samples(self._raw_sample_pool, n_fixed)
-        fixed = build_fixed_eval(pool, self.variant) if pool else None
-        # 无论构建成功与否都清空池子，避免 build 失败时无界累积
+        fixed = build_fixed_eval(pool, self.variant, source="自对弈池") if pool else None
+        if fixed is None:
+            # 退化 / 构建失败：保留池子继续攒，下轮重试（build_fixed_eval 已打印原因）
+            return
         self._raw_sample_pool = []
-        if fixed is not None:
-            self._fixed_eval = fixed
+        self._fixed_eval = fixed
 
     def _maybe_augment(self, episode_dict: Dict) -> List[Dict]:
         """按 config 对 episode 做空间对称增强（见 training/augment.py）。"""

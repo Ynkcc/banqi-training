@@ -5,12 +5,18 @@ gRPC 签发的预签名 URL 上下行，零存储配置，仅需 SCHEDULER_ENDPO
 """
 
 from .episode_store import EpisodeStore, SchedulerEpisodeStore
-from .model_registry import ModelRegistry, SchedulerModelRegistry, scheduler_variant
+from .model_registry import (
+    ModelRegistry,
+    SchedulerModelRegistry,
+    scheduler_should_stop,
+    scheduler_variant,
+)
 
 __all__ = [
     "EpisodeStore",
     "SchedulerEpisodeStore",
     "ModelRegistry",
     "SchedulerModelRegistry",
+    "scheduler_should_stop",
     "scheduler_variant",
 ]

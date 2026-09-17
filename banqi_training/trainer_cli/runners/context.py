@@ -198,10 +198,8 @@ def log_meta_tb(config: Config, variant_id: str, tb_log_dir: str) -> None:
         "reanalysis_enabled": config.REANALYSIS_ENABLED,
         "reanalysis_pool_size": config.REANALYSIS_POOL_SIZE,
         "reanalysis_batch_positions": config.REANALYSIS_BATCH_POSITIONS,
-        "eval_match_rounds": config.EVAL_MATCH_ROUNDS,
-        "eval_match_games": config.EVAL_MATCH_GAMES,
-        "eval_match_opponents": config.EVAL_MATCH_OPPONENTS,
-        "eval_match_vs_prev": config.EVAL_MATCH_VS_PREV,
+        # 绝对强度评估已移交调度器（SCHEDULER_EVAL_*）：trainer 只轮询停机信号
+        "should_stop_poll_seconds": config.SHOULD_STOP_POLL_SECONDS,
     }
     add_hparams({k: str(v) for k, v in hparams.items()}, {})
 

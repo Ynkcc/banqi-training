@@ -45,6 +45,59 @@ def select_balanced_fixed_samples(pool: List[Dict], n_fixed: int) -> List[Dict]:
     return selected[:n_fixed]
 
 
+def result_classes(results: np.ndarray) -> Dict[str, int]:
+    """按终局结果分三类计数（胜/和/负）。
+
+    固定验证集的意义在于「同一批局面随训练变化」；若这批局面的终局结果只有一类
+    （例如全是平局），`corr(终局)` 与「胜负区分度」在数学上不可计算——旧实现会在
+    这种情况下静默返回字面量 0.0，与「真实的零相关」无法区分（历史事故：268 轮
+    恒为 0.000 无人发现）。故这里显式暴露类别计数，供构建时校验与日志展示。
+    """
+    win = int(np.sum(results > 0))
+    loss = int(np.sum(results < 0))
+    draw = int(results.size - win - loss)
+    return {"win": win, "draw": draw, "loss": loss}
+
+
+def auc_win_loss(pred: np.ndarray, results: np.ndarray) -> float:
+    """胜负二分类 AUC（Mann-Whitney U，含并列值校正；无 sklearn 依赖）。
+
+    只取决胜样本（终局 ±1），回答「价值头能否把赢的局面排在输的局面之前」——
+    这是比 corr(pred, ±1) 更稳健的价值头质量指标（4x2 基准 AUC≈0.92）。
+    样本不含两类或长度为 0 时返回 nan（不可计算 ≠ 0）。
+    """
+    pos = results > 0
+    n_pos = int(pos.sum())
+    n_neg = int((results < 0).sum())
+    if n_pos == 0 or n_neg == 0 or pred.size == 0:
+        return float("nan")
+    # 只对决胜样本排序：秩和公式假定「每个样本非正类即负类」，把平局样本混进排名
+    # 会把「胜 > 和」也算成 AUC 优势（实测 1 胜 1 负 + 2 平局会算出 2.0）。
+    keep = pos | (results < 0)
+    p = pred[keep]
+    is_pos = pos[keep]
+    order = np.argsort(p, kind="mergesort")
+    ranks = np.empty(p.size, dtype=np.float64)
+    ranks[order] = np.arange(1, p.size + 1, dtype=np.float64)
+    sorted_p = p[order]
+    # 并列值取平均秩：AUC 对并列敏感，不校正会把「预测全相等」算成 0.5 以外的值
+    i = 0
+    while i < sorted_p.size:
+        j = i
+        while j + 1 < sorted_p.size and sorted_p[j + 1] == sorted_p[i]:
+            j += 1
+        if j > i:
+            ranks[order[i:j + 1]] = (i + 1 + j + 1) / 2.0
+        i = j + 1
+    rank_sum = float(ranks[is_pos].sum())
+    return (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+
+
+def _fmt_metric(v: float, digits: int = 3) -> str:
+    """指标格式化：不可计算（nan/inf）打印 n/a，避免与真实的 0 混淆。"""
+    return "n/a" if not np.isfinite(v) else f"{v:.{digits}f}"
+
+
 def _policy_top2(samples: List[Dict], masks: np.ndarray, aspace: int) -> np.ndarray:
     """由策略目标 π' 取每个局面的前二动作（非法动作屏蔽，缺失策略填 -1）。
 
@@ -66,17 +119,36 @@ def _policy_top2(samples: List[Dict], masks: np.ndarray, aspace: int) -> np.ndar
     return out
 
 
-def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
-    """将 Dict 列表样本构建为 numpy array 组成的固定验证集。"""
+def build_fixed_eval(samples: List[Dict], variant: Variant, source: str = "") -> Optional[Dict]:
+    """将 Dict 列表样本构建为 numpy array 组成的固定验证集。
+
+    退化保护：终局结果必须覆盖至少两类（且非常数），否则 corr(终局) / 胜负区分度在
+    数学上不可计算。此时**拒绝构建并打印原因**，绝不返回一个「指标恒为 0」的验证集 ——
+    那正是历史事故的成因：仪表失效后 268 轮里 corr(终局) 一直是字面量 0.0，无人发现。
+    调用方（TrainWorker）应保留样本池继续攒，下轮重试。
+    """
     if not samples:
         return None
     C = build_constants(variant)
     aspace = C.ACTION_SPACE_SIZE
+    results = np.array(
+        [float(s.get("game_result_value", 0.0)) for s in samples],
+        dtype=np.float32,
+    )
+    classes = result_classes(results)
+    covered = sum(1 for n in classes.values() if n > 0)
+    if covered < 2 or float(np.std(results)) <= 1e-6:
+        print(
+            f"[TR-{variant.id}] ⚠️ 固定验证集退化（拒绝构建）：{len(samples)} 局面中"
+            f" 胜 {classes['win']} / 和 {classes['draw']} / 负 {classes['loss']}；"
+            f"终局结果需覆盖至少两类，否则 corr(终局)/胜负区分度恒为 0（仪表失效）"
+        )
+        return None
     try:
         masks = np.array([s["action_mask"] for s in samples], dtype=np.float32)
         if masks.ndim == 1:
             masks = np.ones((len(samples), aspace), dtype=np.float32)
-        return {
+        fixed = {
             "boards": np.stack(
                 [
                     np.array(s["board_state"], dtype=np.float32).reshape(
@@ -88,10 +160,9 @@ def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
             "scalars": np.stack(
                 [np.array(s["scalar_state"], dtype=np.float32) for s in samples]
             ),
-            "results": np.array(
-                [s.get("game_result_value", 0.0) for s in samples],
-                dtype=np.float32,
-            ),
+            "results": results,
+            # 终局类别计数：日志与退化判断共用（避免各处重复推导）
+            "classes": classes,
             # 终局归一化子力差：value target 改用 game_hp 时 corr(终局) 会自然下降，
             # 需以本项为基准判断价值头是否真的学到了子力信息（见 eval_value_drift）。
             "health_diffs": np.array(
@@ -115,8 +186,17 @@ def build_fixed_eval(samples: List[Dict], variant: Variant) -> Optional[Dict]:
             # 两者并列报告，避免用带噪标签低估策略头（实测 0.60 vs 0.87）。
             "pi_top2": _policy_top2(samples, masks, aspace),
         }
-    except Exception:
+    except Exception as e:
+        # 不再静默：构建失败会让全部固定验证集指标一起消失，必须能看见原因
+        print(f"[TR-{variant.id}] ⚠️ 固定验证集构建失败（本轮跳过评估）: {e!r}")
         return None
+    print(
+        f"[TR-{variant.id}] 🎯 固定验证集已就绪"
+        + (f"（来源 {source}）" if source else "")
+        + f"：{len(samples)} 局面"
+        f"（胜 {classes['win']} / 和 {classes['draw']} / 负 {classes['loss']}）"
+    )
+    return fixed
 
 
 def prefill_from_archive(buffer, variant: Variant, cfg) -> Optional[Dict]:
@@ -158,13 +238,16 @@ def prefill_from_archive(buffer, variant: Variant, cfg) -> Optional[Dict]:
             )
         n_fixed = cfg.VALUE_DRIFT_NUM_POSITIONS
         if n_fixed > 0 and samples:
-            fixed = build_fixed_eval(samples[:n_fixed], variant)
+            # 与自对弈路径口径一致：先按终局结果分层均衡，再交由 build_fixed_eval 做退化
+            # 校验。旧实现直接取 samples[:n_fixed]，整批同一类别时仪表会静默失效。
+            pool = select_balanced_fixed_samples(samples, n_fixed)
+            fixed = build_fixed_eval(pool, variant, source="归档") if pool else None
             if fixed:
-                print(
-                    f"[TR-{variant.id}] 🎯 固定价值验证集（归档）"
-                    f"{len(fixed['boards'])} 局面已就绪"
-                )
                 return fixed
+            print(
+                f"[TR-{variant.id}] ⚠️ 归档样本无法构建固定验证集（见上方原因），"
+                f"回退到自对弈样本池"
+            )
     except Exception as e:
         print(f"[TR-{variant.id}] ⚠️ 冷存储预填充失败 ({e})，继续正常训练")
     return None
@@ -197,10 +280,12 @@ def eval_value_drift(
         pred = values.cpu().numpy().reshape(-1).astype(np.float32)
         model.train()
         gr = fixed_eval["results"]
+        # 退化分支一律 nan（不可计算 ≠ 0）：旧实现返回字面量 0.0，与「真实的零相关」
+        # 无法区分 —— 那正是仪表失效 268 轮却无人发现的直接原因。
         corr = (
             float(np.corrcoef(pred, gr)[0, 1])
             if len(pred) > 2 and np.std(pred) > 1e-6 and np.std(gr) > 1e-6
-            else 0.0
+            else float("nan")
         )
         # 子力差基准：value target 改用 game_hp 后 corr(终局) 会自然下降，
         # 本项用于区分「目标语义改变」与「价值头退化」。
@@ -209,23 +294,30 @@ def eval_value_drift(
             float(np.corrcoef(pred, hp)[0, 1])
             if hp is not None and len(pred) > 2
             and np.std(pred) > 1e-6 and np.std(hp) > 1e-6
-            else 0.0
+            else float("nan")
         )
         sep = (
             float(pred[gr > 0].mean() - pred[gr < 0].mean())
             if (np.any(gr > 0) and np.any(gr < 0))
-            else 0.0
+            else float("nan")
         )
+        # 胜负 AUC：只取决胜样本，比 corr(pred, ±1) 更稳健的价值头质量指标
+        auc = auc_win_loss(pred, gr)
+        classes = fixed_eval.get("classes") or result_classes(gr)
         print(
             f"{tag} 📊 价值漂移 Round#{round_num}: pred_mean={pred.mean():+.3f} "
-            f"std={pred.std():.3f} corr(终局)={corr:.3f} corr(子力差)={corr_hp:.3f} "
-            f"胜负区分度={sep:.3f}"
+            f"std={pred.std():.3f} corr(终局)={_fmt_metric(corr)} "
+            f"corr(子力差)={_fmt_metric(corr_hp)} 胜负区分度={_fmt_metric(sep)} "
+            f"AUC={_fmt_metric(auc)}"
+            f"（胜{classes['win']}/和{classes['draw']}/负{classes['loss']}）"
         )
         add_scalar("value_drift/pred_mean", pred.mean(), global_step)
         add_scalar("value_drift/pred_std", pred.std(), global_step)
         add_scalar("value_drift/corr_result", corr, global_step)
         add_scalar("value_drift/corr_health_diff", corr_hp, global_step)
         add_scalar("value_drift/sep", sep, global_step)
+        add_scalar("value_drift/auc_win_loss", auc, global_step)
+        add_scalar("value_drift/n_positions", float(pred.size), global_step)
     except Exception as e:
         print(f"{tag} ⚠️ 价值漂移评估失败 ({e})")
 

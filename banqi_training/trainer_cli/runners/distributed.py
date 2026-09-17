@@ -19,7 +19,12 @@ from typing import Optional
 
 from banqi_training.config import Config, make_config
 from banqi_training.episode_codec import DATA_RESNET, kind_name
-from banqi_training.infra import ModelRegistry, SchedulerEpisodeStore, SchedulerModelRegistry
+from banqi_training.infra import (
+    ModelRegistry,
+    SchedulerEpisodeStore,
+    SchedulerModelRegistry,
+    scheduler_should_stop,
+)
 from banqi_training.memory_guard import start_memory_guard
 from banqi_training.tb_logger import close_summary_writer, init_summary_writer
 from banqi_training.training import TrainWorker
@@ -120,6 +125,15 @@ def run_distributed(variant_id: str) -> None:
     train_worker.start()
 
     start_t = time.time()
+    # 绝对强度停机轮询：调度器按「连续 N 次评测无提升」置位 GetInfo.should_stop，
+    # 命中即走**既有**优雅停止路径（set 事件 → TrainWorker 训完当前轮并落 checkpoint）。
+    stop_poll = int(config.SHOULD_STOP_POLL_SECONDS)
+    next_stop_poll = time.time() + stop_poll if stop_poll > 0 else float("inf")
+    if stop_poll > 0:
+        print(
+            f"{tag} 绝对强度停机轮询：每 {stop_poll}s 一次 GetInfo.should_stop"
+            f"（SHOULD_STOP_POLL_SECONDS=0 可关闭；轮询失败按「不停止」处理）"
+        )
     try:
         while not thread_stop.is_set():
             if config.MAX_RUNTIME_SECONDS > 0 and \
@@ -127,6 +141,13 @@ def run_distributed(variant_id: str) -> None:
                 print(f"{tag} 达到运行时限 {config.MAX_RUNTIME_SECONDS}s，优雅停止...")
                 thread_stop.set()
                 break
+            if time.time() >= next_stop_poll:
+                next_stop_poll = time.time() + stop_poll
+                should_stop, reason = scheduler_should_stop(registry.endpoint)
+                if should_stop:
+                    print(f"{tag} 🏁 调度器下发停机信号，优雅停止：{reason}")
+                    thread_stop.set()
+                    break
             if not train_worker.is_alive():
                 print(f"{tag} ⚠️ TrainWorker 已退出，停止闭环")
                 thread_stop.set()

@@ -351,13 +351,9 @@ class Config:
     HEALTH_GAUSS_SIGMA: float             # HL-Gauss 标签平滑高斯标准差（桶）
     HEALTH_UTILITY_WEIGHT: float          # MCTS 复合效用中血量期望权重 λ（0=禁用血量影响搜索，P3 使用）
     HEALTH_UTILITY_CONFIDENCE_EXP: float  # λ 随 |v_win| 的自适应幂指数；0=常量 λ（P3 使用）
-    # ============ 对战评估（TensorBoard eval/*，通用） ============
-    # 周期性把当前模型与对手及上一轮模型对弈，记录 eval/* 指标到 TensorBoard。
-    # EVAL_MATCH_ROUNDS=0 时关闭。
-    EVAL_MATCH_ROUNDS: int            # 对战评估周期（训练轮，0=关闭）
-    EVAL_MATCH_GAMES: int             # 每周期对弈局数（交替先后手）
-    EVAL_MATCH_OPPONENTS: List[str]   # 对手列表：random / expectimax:<path.nnue> / .pt路径
-    EVAL_MATCH_VS_PREV: bool          # 是否与上一轮训练后模型对头（守门）
+    # 注：原 EVAL_MATCH_* （单机形态下的周期对战评估 / 达标停机）已删除。分布式形态下
+    # trainer 无棋引擎，"绝对强度评估"由调度器下发 TASK_EVAL 给 collector 执行，配置见
+    # SCHEDULER_EVAL_*（含对手阶梯与「连续 N 次无提升」判据）；停机信号经 GetInfo 轮询。
     # ============ 训练模式（TRAIN_MODE 分流） ============
     # TRAIN_MODE: 标准模型自对弈闭环 / 归档训练
     #   - "selfplay"   : 默认。模型 MCTS 自对弈生成数据 + 训练（现有闭环）
@@ -402,9 +398,6 @@ class Config:
     EXPECTIMAX_SIDECAR_WORKERS: int = 4                 # 局间并发 worker 数
     EXPECTIMAX_SIDECAR_NODE_BUDGET: int = 500000        # 每步搜索节点预算
     EXPECTIMAX_SIDECAR_MAX_DEPTH: int = 8               # 每步搜索最大深度
-    # ============ 对战评估达标停机（可选，0=关闭） ============
-    EVAL_MATCH_STOP_WIN_RATE: float = 0.0  # 达到该胜率时停止训练（0=关闭）
-    EVAL_MATCH_STOP_OPPONENT: str = ""     # 停机判定的对手（空=任一对手达标即停）
     VALUE_MIX_GAME_WEIGHT: float = 0.5     # VALUE_TARGET_MODE=mixed 时终局价值的权重 λ
     # ============ 分布化价值头（离散分类，可选；见 config.default.yaml 的 value_dist 段） ============
     # value 头改为对归一化价值 v∈[-1,1] 的 K 桶分布，损失由 MSE 换为 HL-Gauss
@@ -444,6 +437,11 @@ class Config:
     REANALYSIS_BATCH_POSITIONS: int = 256     # 每次提交的位置条数（不足则继续攒）
     REANALYSIS_SUBMIT_EVERY_N_ROUNDS: int = 10  # 每 N 轮尝试提交一次
     REANALYSIS_MCTS_SIMS: int = 0             # 重搜模拟次数；0 = 用 collector 自对弈配置的默认值
+    # ============ 调度器停机轮询（绝对强度判据，可选） ============
+    # 调度器按「连续 N 次评测无提升」置位 GetInfo.should_stop；trainer 按本间隔轮询，
+    # 命中后走既有优雅停止路径（先把当前轮训完并落 checkpoint 再退出）。
+    # 0 = 不轮询（关闭该停机通道）；轮询失败一律按「不停止」处理，绝不因网络抖动中断训练。
+    SHOULD_STOP_POLL_SECONDS: int = 30
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

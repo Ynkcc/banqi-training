@@ -23,6 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
 proto = ["grpcio-tools"]
+# 测试依赖：仓库内 tests/ 全部基于 pytest（pip install "banqi-training[test]"）
+test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
 include = ["banqi_training*"]

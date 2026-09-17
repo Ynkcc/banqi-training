@@ -25,6 +25,32 @@ def scheduler_variant(endpoint: Optional[str] = None) -> str:
     return variant
 
 
+def scheduler_should_stop(
+    endpoint: Optional[str] = None, timeout: float = 5.0
+) -> tuple[bool, str]:
+    """轮询调度器的绝对强度停机信号（GetInfo.should_stop），返回 (是否停止, 原因)。
+
+    调度器按「连续 N 次评测提升不足」置位该信号（见 banqi-scheduler/internal/scheduler/eval.go）。
+    任何异常都按**不停止**处理：停机轮询失败绝不能让训练意外中断（网络抖动是常态）。
+    每次调用新建 channel 并在 finally 关闭，避免长跑下 fd/subchannel 泄漏。
+    """
+    import grpc
+
+    from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
+
+    endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
+    target = endpoint.split("://", 1)[-1]
+    channel = grpc.insecure_channel(target)
+    try:
+        stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+        reply = stub.GetInfo(scheduler_pb2.GetInfoRequest(), timeout=timeout)
+        return bool(reply.should_stop), str(reply.stop_reason)
+    except Exception as exc:  # noqa: BLE001 — 轮询失败按「不停止」处理
+        return False, f"GetInfo 轮询失败: {exc}"
+    finally:
+        channel.close()
+
+
 class ModelRegistry(Protocol):
     """模型版本与准入接口（L4）。"""
 

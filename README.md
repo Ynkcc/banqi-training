@@ -8,8 +8,24 @@ Banqi 分布式训练器（从 `rust_4x8/python` 抽取，仅保留分布式形�
 - 经 scheduler gRPC `ListEpisodes` 拉取 worker 直传的 episode 批次（预签名 GET，trainer 零存储配置）
 - `TrainWorker` 消费训练（buffer / augment / losses / checkpoint）
 - watch 导出的 onnx，经 `SignNetworkUpload` 预签名直传 + `RegisterNetwork` 登记（gatekeeper 判停晋级）
+- 按 `SHOULD_STOP_POLL_SECONDS` 轮询 `GetInfo.should_stop`：调度器按绝对强度判据置位后优雅停止
 
 自对弈 worker（banqi-collector）独立部署，不在本仓库范围内。
+
+## 评估口径（重要）
+
+本仓库**只负责训练**，不执行对局（分布式形态下 trainer 没有棋引擎）。两件事分别在别处：
+
+| 事项 | 位置 |
+|---|---|
+| **绝对强度**（vs 规则/内建对手的胜率阶梯） | 调度器下发 `TASK_EVAL` 给 collector 执行，结果落 `eval_results`，见调度器 WebUI「绝对强度」页 |
+| **相对强度**（candidate vs 当前 best 的晋级判定） | 调度器 gatekeeper + GSPRT |
+| **训练信号健康度**（价值/策略头随训练的变化） | 本仓库：固定验证集指标（`value_drift/*`、`policy_acc/*`，TensorBoard） |
+
+⚠️ 相对强度门禁**结构上测不出**「所有版本都打不过一个 3 行启发式」——必须配套绝对强度阶梯。
+⚠️ 训练信号健康度用 `value_drift/auc_win_loss`（价值头胜负 AUC）判断，**不要**只看 `corr(终局)`：
+`game_hp` 目标下该项天然偏低；而**恒为 0.000 或 n/a 说明固定验证集退化**（终局类别不足两类，
+`build_fixed_eval` 会拒绝构建并打印原因）。历史上该仪表静默失效 268 轮无人发现。
 
 ## 安装
 

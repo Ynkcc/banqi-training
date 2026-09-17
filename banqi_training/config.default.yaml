@@ -121,14 +121,19 @@ common:
     ARCHIVE_PREFILL_DIR: ""
     ARCHIVE_PREFILL_GAMES: 0      # 预填充对局数默认 0
 
-  # ---------------- 对战评估（TensorBoard eval/*） ----------------
-  eval_match:
-    EVAL_MATCH_ROUNDS: 5          # 对战评估周期（轮次，0=关闭）
-    EVAL_MATCH_GAMES: 20          # 每周期对弈局数
-    EVAL_MATCH_OPPONENTS: ["random"]  # 对手列表（random / expectimax:<path.nnue> / .pt路径）
-    EVAL_MATCH_VS_PREV: false      # 是否与上一轮模型对头守门。轮次间训练量不够，测试样本过少，暂时禁用
-    EVAL_MATCH_STOP_WIN_RATE: 0.0  # 达到该胜率时停止训练（0=关闭）
-    EVAL_MATCH_STOP_OPPONENT: ""   # 停机判定的对手（空=任一对手达标即停）
+  # ---------------- 对战评估（已迁移至调度器） ----------------
+  # 原单机形态的 EVAL_MATCH_*（周期对战评估 + 达标停机）已删除：分布式形态下 trainer
+  # 没有棋引擎，根本无法执行对局（旧实现依赖已移除的 PyO3 扩展），留着只会造成
+  # 「以为每 5 轮有评估、实际一次都没跑」的假象。
+  # 绝对强度评估现由调度器下发 TASK_EVAL 给 collector 执行：配置见调度器环境变量
+  # SCHEDULER_EVAL_*（对手阶梯 / 模式 / 节流 / 连续 N 次无提升判据），
+  # 结果趋势见调度器 WebUI「绝对强度」页与 GET /api/eval。
+
+  # ---------------- 绝对强度停机轮询 ----------------
+  # 调度器按「连续 N 次评测提升不足」置位 GetInfo.should_stop；trainer 按本间隔轮询，
+  # 命中后走既有优雅停止路径（先训完当前轮并落 checkpoint 再退出）。
+  should_stop:
+    SHOULD_STOP_POLL_SECONDS: 30  # 轮询间隔（秒）；0 = 关闭该停机通道
 
   # ---------------- 价值目标与漂移评估 ----------------
   value_target:
