@@ -17,13 +17,14 @@ import threading
 import time
 from typing import Optional
 
-from banqi_training.config import Config, make_config
+from banqi_training.config import Config, apply_overrides, make_config, snapshot_overridable
 from banqi_training.episode_codec import DATA_RESNET, kind_name
 from banqi_training.infra import (
     ModelRegistry,
     SchedulerEpisodeStore,
     SchedulerModelRegistry,
     scheduler_should_stop,
+    scheduler_train_config,
 )
 from banqi_training.memory_guard import start_memory_guard
 from banqi_training.tb_logger import close_summary_writer, init_summary_writer
@@ -70,6 +71,18 @@ def run_distributed(variant_id: str) -> None:
     config: Config = make_config(variant_id)
     config._variant = variant
     tag = f"[{variant.id}][distributed]"
+    trainer_id = os.environ.get("TRAINER_ID", "")
+
+    # 调度层训练配置 bootstrap：必须在 TrainWorker 构造之前套用——结构校验、
+    # DataBuffer 的值目标校验、lr_decay_batches 都是构造期一次性快照，晚了不生效。
+    # 同时留下本地基线，供调度层撤销某项覆盖时回退。
+    cfg_baseline = snapshot_overridable(config)
+    accepted, train_overrides, message = scheduler_train_config(variant_id, trainer_id)
+    if not accepted:
+        print(f"{tag} ⚠️ 未取到调度层训练配置：{message}（使用本地配置）")
+    elif train_overrides:
+        print(f"{tag} ⚙️ 已套用调度层训练配置: {apply_overrides(config, train_overrides)}")
+    applied_overrides: dict = dict(train_overrides) if accepted else {}
 
     log_file = setup_variant_logging(variant)
     print(f"{tag} 📝 运行日志记录至: {log_file}")
@@ -98,6 +111,7 @@ def run_distributed(variant_id: str) -> None:
         variant, config, counting_q, thread_stop,
         ckpt_dir=os.path.join(config.OUTPUT_DIR, "checkpoints"),
         reanalysis_submitter=store.submit_reanalysis,
+        cfg_baseline=cfg_baseline,
     )
     onnx_path = train_worker.onnx_path()
     sep = "=" * 56
@@ -131,9 +145,12 @@ def run_distributed(variant_id: str) -> None:
     next_stop_poll = time.time() + stop_poll if stop_poll > 0 else float("inf")
     if stop_poll > 0:
         print(
-            f"{tag} 绝对强度停机轮询：每 {stop_poll}s 一次 GetInfo.should_stop"
-            f"（SHOULD_STOP_POLL_SECONDS=0 可关闭；轮询失败按「不停止」处理）"
+            f"{tag} 停机 / 训练配置热更轮询：每 {stop_poll}s 一次 "
+            f"GetInfo.should_stop + GetTrainConfig"
+            f"（SHOULD_STOP_POLL_SECONDS=0 可关闭；轮询失败按「不停止、不改配置」处理）"
         )
+    else:
+        print(f"{tag} ⚠️ SHOULD_STOP_POLL_SECONDS=0：停机与训练配置热更轮询均已关闭")
     try:
         while not thread_stop.is_set():
             if config.MAX_RUNTIME_SECONDS > 0 and \
@@ -148,6 +165,14 @@ def run_distributed(variant_id: str) -> None:
                     print(f"{tag} 🏁 调度器下发停机信号，优雅停止：{reason}")
                     thread_stop.set()
                     break
+                # 训练配置热更：与停机轮询共用节流周期，只在内容变化时登记；实际生效
+                # 由 TrainWorker 在下一个轮边界执行（不打断进行中的训练）。
+                accepted, latest, message = scheduler_train_config(variant_id, trainer_id)
+                if not accepted:
+                    print(f"{tag} ⚠️ 训练配置拉取失败：{message}")
+                elif latest != applied_overrides:
+                    train_worker.apply_config(latest)
+                    applied_overrides = dict(latest)
             if not train_worker.is_alive():
                 print(f"{tag} ⚠️ TrainWorker 已退出，停止闭环")
                 thread_stop.set()

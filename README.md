@@ -9,6 +9,7 @@ Banqi 分布式训练器（从 `rust_4x8/python` 抽取，仅保留分布式形�
 - `TrainWorker` 消费训练（buffer / augment / losses / checkpoint）
 - watch 导出的 onnx，经 `SignNetworkUpload` 预签名直传 + `RegisterNetwork` 登记（gatekeeper 判停晋级）
 - 按 `SHOULD_STOP_POLL_SECONDS` 轮询 `GetInfo.should_stop`：调度器按绝对强度判据置位后优雅停止
+- 训练超参可远程调整：启动时经 `GetTrainConfig` 引导（覆盖本地 YAML 对应字段），运行中按同一轮询节奏热更；可调字段白名单与取值校验由调度器裁定（见 [banqi-scheduler §5.1](../banqi-scheduler/ARCHITECTURE.md)），本端 `config.py::TRAIN_CONFIG_OVERRIDABLE` 须与调度器白名单同步增删。删除覆盖即回落本地值
 
 自对弈 worker（banqi-collector）独立部署，不在本仓库范围内。
 
@@ -63,6 +64,7 @@ banqi_training/
   symmetry.py                空间对称增强（纯 Python：动作表 / D4 置换 / board 重排）
 tests/test_symmetry.py       对称增强单测（置换合法性 / 动作计数 / 增强一致性）
 tests/test_episode_codec.py  episode 记录解码单测（位平面布局 / 张量还原 / 契约校验）
+tests/test_config_overrides.py  训练超参覆盖单测（白名单一致 / 校验 / 类型转换 / 原子拒绝 / 基线回落）
 ```
 
 训练数据格式：worker 把一批 episode 编码为 `EpisodeBatch`（proto 定义，字段号 +

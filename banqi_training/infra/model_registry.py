@@ -51,6 +51,42 @@ def scheduler_should_stop(
         channel.close()
 
 
+def scheduler_train_config(
+    variant: str,
+    trainer_id: str = "",
+    endpoint: Optional[str] = None,
+    timeout: float = 5.0,
+) -> tuple[bool, dict, str]:
+    """拉取调度器下发的运行时可调训练配置（GetTrainConfig）。
+
+    返回 (是否接受, 覆盖项, 说明)。用两处：trainer 启动 bootstrap（须在构造
+    TrainWorker 之前套用，让构造期快照看到新值）、运行中周期拉取热更。字段名与
+    banqi_training.config.Config 一一对应，白名单与取值域由调度器裁定
+    （banqi-scheduler/internal/scheduler/trainconfig.go）。
+
+    异常按「无覆盖」处理：配置拉取失败绝不能让训练中断（与 should_stop 轮询同理），
+    返回 accepted=False 由调用方决定是否告警。
+    """
+    import grpc
+
+    from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
+
+    endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
+    target = endpoint.split("://", 1)[-1]
+    channel = grpc.insecure_channel(target)
+    try:
+        stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+        reply = stub.GetTrainConfig(
+            scheduler_pb2.GetTrainConfigRequest(variant=variant, trainer_id=trainer_id),
+            timeout=timeout,
+        )
+        return bool(reply.accepted), dict(reply.overrides), str(reply.message)
+    except Exception as exc:  # noqa: BLE001 — 拉取失败按「无覆盖」处理
+        return False, {}, f"GetTrainConfig 拉取失败: {exc}"
+    finally:
+        channel.close()
+
+
 class ModelRegistry(Protocol):
     """模型版本与准入接口（L4）。"""
 

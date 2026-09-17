@@ -529,6 +529,103 @@ def make_config(variant_id: str) -> Config:
     return _config_cache[variant_id]
 
 
+# --------------------------------------------------------------------------- #
+# 调度层下发的运行时配置覆盖（banqi-scheduler 的 GetTrainConfig）
+# --------------------------------------------------------------------------- #
+
+# 可远程调节的字段白名单，与 banqi-scheduler/internal/scheduler/trainconfig.go 的
+# trainConfigSpecs 一一对应（两侧必须同步增删）。判据：不改模型结构、不依赖本地
+# 路径/设备、且能在训练循环中热更；白名单外的字段一律拒绝，避免调度层误下发结构
+# 开关或路径后静默污染实验。
+TRAIN_CONFIG_OVERRIDABLE = frozenset({
+    # LR 计划
+    "LEARNING_RATE", "MIN_LR", "LR_DECAY_STEPS", "LR_DECAY_ROUNDS",
+    # 训练量
+    "TRAIN_BATCH", "TRAIN_EPOCHS_PER_ROUND", "MIN_NEW_SAMPLES_TO_TRAIN", "WEIGHT_DECAY",
+    # EMA 与采样
+    "EMA_DECAY", "RECENT_SAMPLE_ENABLED", "FAST_SAMPLE_LOSS_WEIGHT",
+    # 目标函数
+    "VALUE_TARGET_MODE", "VALUE_TARGET_ANNEAL_ROUNDS", "VALUE_MIX_GAME_WEIGHT",
+    "POLICY_TARGET_TEMPERATURE", "POLICY_TARGET_ACTION_MIX",
+    "HEALTH_LOSS_WEIGHT", "HEALTH_GAUSS_SIGMA", "VALUE_GAUSS_SIGMA",
+    # 数据增强
+    "DATA_AUGMENT_ENABLED", "DATA_AUGMENT_K", "DATA_AUGMENT_KEEP_ORIGINAL",
+    # 局面重搜节流
+    "REANALYSIS_BATCH_POSITIONS", "REANALYSIS_SUBMIT_EVERY_N_ROUNDS", "REANALYSIS_MCTS_SIMS",
+    # 运行控制
+    "MAX_RUNTIME_SECONDS", "SHOULD_STOP_POLL_SECONDS",
+})
+
+
+def validate_value_target(*, mode: str, temperature: float, action_mix: float) -> None:
+    """校验 value / policy 目标取值域。
+
+    构造期（DataBuffer.__init__）与运行时热更（apply_overrides）共用同一套校验：
+    VALUE_TARGET_MODE 拼错会静默退化为 mcts、T<=0 会让 p^(1/T) 产出 inf/NaN，
+    两者都必须在生效前拦住。
+    """
+    modes = {"mcts", "game", "completed_q", "mixed", "anneal", "game_hp"}
+    if mode not in modes:
+        raise ValueError(f"未知 VALUE_TARGET_MODE={mode!r}，可选 {sorted(modes)}")
+    if float(temperature) <= 0.0:
+        raise ValueError(
+            f"POLICY_TARGET_TEMPERATURE 必须 > 0（1.0 = 恒等）: {temperature}"
+        )
+    if not 0.0 <= float(action_mix) <= 1.0:
+        raise ValueError(
+            f"POLICY_TARGET_ACTION_MIX 必须在 [0,1]（0.0 = 恒等）: {action_mix}"
+        )
+
+
+def snapshot_overridable(cfg: Config) -> Dict[str, Any]:
+    """记录可远程调节字段的本地值，作为「覆盖被撤销」时的回退基线。
+
+    必须在首次 apply_overrides 之前调用（构造 TrainWorker 之前），否则拿到的
+    已经是覆盖后的值，回退会变成回退到覆盖值。
+    """
+    return {name: getattr(cfg, name) for name in TRAIN_CONFIG_OVERRIDABLE}
+
+
+def apply_overrides(
+    cfg: Config,
+    overrides: Dict[str, str],
+    baseline: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    """把调度器下发的「字段名 → 值字符串」就地写入 cfg，返回真正变化的字段（升序）。
+
+    类型转换复用本地 YAML / 环境变量的同一套逻辑（_cast_for_field 按 dataclass 注解
+    推导），取值域校验复用 validate_value_target，保证热更后的配置与启动时等价。
+
+    overrides 是**全量覆盖**语义：给 baseline 时先回落基线再套用覆盖，于是调度器侧
+    删除的项会自动退回本地值；不给 baseline 则只写入下发项（本地下发通道不撤销）。
+
+    先整体转换与校验、再统一写入：任一项非法就整批拒绝，避免 cfg 停在半套新值的
+    中间状态（部分生效比不生效更难排查）。
+    """
+    field_types = typing.get_type_hints(Config)
+    casted: Dict[str, Any] = {}
+    for name, raw in overrides.items():
+        if name not in TRAIN_CONFIG_OVERRIDABLE:
+            raise ValueError(
+                f"[banqi_training.config] 字段 {name!r} 不支持远程下发；"
+                f"可远程调节的字段: {sorted(TRAIN_CONFIG_OVERRIDABLE)}"
+            )
+        casted[name] = _cast_for_field(field_types[name])(raw)
+    validate_value_target(
+        mode=casted.get("VALUE_TARGET_MODE", cfg.VALUE_TARGET_MODE),
+        temperature=casted.get("POLICY_TARGET_TEMPERATURE", cfg.POLICY_TARGET_TEMPERATURE),
+        action_mix=casted.get("POLICY_TARGET_ACTION_MIX", cfg.POLICY_TARGET_ACTION_MIX),
+    )
+    targets: Dict[str, Any] = dict(baseline) if baseline else {}
+    targets.update(casted)
+    changed: List[str] = []
+    for name, value in targets.items():
+        if getattr(cfg, name) != value:
+            setattr(cfg, name, value)
+            changed.append(name)
+    return sorted(changed)
+
+
 if __name__ == "__main__":
     import sys
     import shutil

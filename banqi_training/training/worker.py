@@ -11,14 +11,14 @@ import os
 import time
 import threading
 from collections import deque
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 
 from banqi_training.checkpoint import export_model_isolated
-from banqi_training.config import Config, make_config
+from banqi_training.config import Config, apply_overrides, make_config
 from banqi_training.tb_logger import add_scalar
 from banqi_training.variant import Variant, get_variant
 
@@ -48,6 +48,7 @@ class TrainWorker(threading.Thread):
         run_dir: Optional[str] = None,
         ckpt_events: Optional[List[threading.Event]] = None,
         reanalysis_submitter: Optional[Callable[[str, int, bytes, int], Tuple[bool, str]]] = None,
+        cfg_baseline: Optional[Dict[str, Any]] = None,
     ):
         """标准签名：(variant, cfg, data_queue, stop_event, ...)。
 
@@ -58,10 +59,13 @@ class TrainWorker(threading.Thread):
         reanalysis_submitter: 局面重搜提交回调 `(variant, mcts_sims, payload, positions)
         -> (accepted, message)`；REANALYSIS_ENABLED=true 时必须提供（缺失即报错，
         不静默跳过整个特性）。
+        cfg_baseline: 可远程调节字段的本地基线（config.snapshot_overridable 采集）。
+        调度层撤销某项覆盖时靠它回退本地值；本地形态不传，则覆盖只增不减。
         """
         super().__init__(name=f"TrainWorker-{variant.id}", daemon=True)
         self.variant = variant
         self.cfg = cfg
+        self._cfg_baseline = cfg_baseline
         self.data_queue = data_queue
         self.stop_event = stop_event
         self.ckpt_dir = ckpt_dir or variant.checkpoints_dir
@@ -115,6 +119,10 @@ class TrainWorker(threading.Thread):
         self._warmup_done = False
         self._raw_sample_pool: List[Dict] = []
         self._fixed_eval: Optional[Dict] = None
+        # 调度层下发的运行时配置覆盖（字段名 → 值字符串）：apply_config 由 RPC 线程
+        # 写入、_apply_pending_config 由训练线程在轮边界消费，故单独加锁保护。
+        self._pending_overrides: Optional[Dict[str, str]] = None
+        self._pending_overrides_lock = threading.Lock()
         self._init_model_and_checkpoint()
 
     @classmethod
@@ -126,6 +134,70 @@ class TrainWorker(threading.Thread):
         """
         v = variant_or_id if isinstance(variant_or_id, Variant) else get_variant(str(variant_or_id))
         return cls(v, make_config(v.id), data_queue, stop_event)
+
+    def apply_config(self, overrides: Dict[str, str]) -> None:
+        """登记调度层下发的训练配置覆盖（由 RPC 线程调用，立即返回）。
+
+        只登记不落地：真正写入 cfg 与重算派生量由训练线程在轮边界执行
+        （见 _apply_pending_config），避免与 scheduler.step / optimizer.step 争用。
+        连发多次只有最后一次生效——配置是全量覆盖语义，不存在次序问题。
+        """
+        with self._pending_overrides_lock:
+            self._pending_overrides = dict(overrides)
+
+    def _apply_pending_config(self) -> bool:
+        """在训练线程的轮边界应用待生效覆盖；返回是否发生了变更。
+
+        「构造期快照」必须在这里重算，否则改了 cfg 也不生效：
+        - lr_decay_batches + scheduler：LR 计划变了要重建余弦调度器并续接进度；
+        - optimizer 的 weight_decay / initial_lr：AdamW 构造期固定，需逐 param_group 改；
+        - anneal_rounds / ema_decay：_anneal_value_weight 与 EMA 更新按实例属性读；
+        - buffer / augmenter 持同一份 cfg 引用，改 cfg 即刻生效，无需额外处理。
+
+        空覆盖（{}）不是「无操作」：它表示调度层已清空全部覆盖，此时按基线回落本地值。
+        """
+        with self._pending_overrides_lock:
+            overrides = self._pending_overrides
+            self._pending_overrides = None
+        if overrides is None:
+            return False
+        applied = apply_overrides(self.cfg, overrides, self._cfg_baseline)
+        changed = set(applied)
+        if not changed:
+            return False
+        if changed & {"LEARNING_RATE", "MIN_LR", "LR_DECAY_STEPS", "LR_DECAY_ROUNDS"}:
+            self._rebuild_lr_schedule()
+        if "WEIGHT_DECAY" in changed:
+            for group in self.optimizer.param_groups:
+                group["weight_decay"] = float(self.cfg.WEIGHT_DECAY)
+        if "EMA_DECAY" in changed:
+            self.ema_decay = float(self.cfg.EMA_DECAY)
+        if "VALUE_TARGET_ANNEAL_ROUNDS" in changed:
+            self.anneal_rounds = self.cfg.VALUE_TARGET_ANNEAL_ROUNDS
+        print(f"[TR-{self.variant.id}] 应用调度层训练配置 {applied}: "
+              f"LR={self.cfg.LEARNING_RATE:g}/MIN_LR={self.cfg.MIN_LR:g}, "
+              f"TRAIN_BATCH={self.cfg.TRAIN_BATCH}, "
+              f"TRAIN_EPOCHS_PER_ROUND={self.cfg.TRAIN_EPOCHS_PER_ROUND}, "
+              f"价值目标={self.cfg.VALUE_TARGET_MODE}")
+        return True
+
+    def _rebuild_lr_schedule(self) -> None:
+        """按当前 cfg 重建余弦调度器并续接进度（LR 计划字段热更后调用）。
+
+        LambdaLR 的 base_lr 取自 param_group['initial_lr']，LEARNING_RATE 变更时必须
+        同步刷新该值，否则新计划仍以旧 LR 为基准。
+        """
+        self.lr_decay_batches = resolve_lr_decay_batches(self.cfg)
+        progress = self.scheduler.last_epoch
+        for group in self.optimizer.param_groups:
+            group["initial_lr"] = float(self.cfg.LEARNING_RATE)
+        self.scheduler = make_cosine_clamp_scheduler(
+            self.optimizer, self.cfg, self.lr_decay_batches
+        )
+        # 显式步进到原进度：让新计划的 LR 立刻生效，而不是等下次 step() 才切
+        self.scheduler.step(progress)
+        print(f"[TR-{self.variant.id}] LR 计划已重建: t_max={self.lr_decay_batches} batch, "
+              f"进度={progress} step, 当前 LR={self.optimizer.param_groups[0]['lr']:.3g}")
 
     def _new_model(self):
         """按当前开关构造同结构的 BanqiNet（训练模型 / EMA 影子模型共用）。
@@ -458,6 +530,12 @@ class TrainWorker(threading.Thread):
                 continue
             if episode_dict is None:
                 break
+
+            # 调度层热更配置：在轮边界消费（此刻不处于训练中，无需与 scheduler /
+            # optimizer 争锁），LR 计划 / optimizer / EMA / 退火 / 节流阈值的重算
+            # 全部在本线程内完成
+            if self._apply_pending_config():
+                batch_train_min_samples = cfg.min_new_samples_to_train()
 
             t0 = time.time()
             # 局面重搜：只收**原始** episode 的快照 —— 增强副本的棋盘已做对称变换，

@@ -84,6 +84,11 @@ class SchedulerServiceStub(object):
                 request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.SerializeToString,
                 response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.FromString,
                 _registered_method=True)
+        self.GetTrainConfig = channel.unary_unary(
+                '/scheduler.SchedulerService/GetTrainConfig',
+                request_serializer=banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigRequest.SerializeToString,
+                response_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigReply.FromString,
+                _registered_method=True)
 
 
 class SchedulerServiceServicer(object):
@@ -150,6 +155,13 @@ class SchedulerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetTrainConfig(self, request, context):
+        """trainer 拉取运行时可调训练配置（启动 bootstrap + 运行中热更）
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SchedulerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -202,6 +214,11 @@ def add_SchedulerServiceServicer_to_server(servicer, server):
                     servicer.SubmitReanalysis,
                     request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.FromString,
                     response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.SerializeToString,
+            ),
+            'GetTrainConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetTrainConfig,
+                    request_deserializer=banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigRequest.FromString,
+                    response_serializer=banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigReply.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -474,6 +491,33 @@ class SchedulerService(object):
             '/scheduler.SchedulerService/SubmitReanalysis',
             banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisRequest.SerializeToString,
             banqi__training_dot_proto_dot_scheduler__pb2.SubmitReanalysisReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetTrainConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/scheduler.SchedulerService/GetTrainConfig',
+            banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigRequest.SerializeToString,
+            banqi__training_dot_proto_dot_scheduler__pb2.GetTrainConfigReply.FromString,
             options,
             channel_credentials,
             insecure,

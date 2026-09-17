@@ -9,6 +9,7 @@ from .model_registry import (
     ModelRegistry,
     SchedulerModelRegistry,
     scheduler_should_stop,
+    scheduler_train_config,
     scheduler_variant,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     "ModelRegistry",
     "SchedulerModelRegistry",
     "scheduler_should_stop",
+    "scheduler_train_config",
     "scheduler_variant",
 ]

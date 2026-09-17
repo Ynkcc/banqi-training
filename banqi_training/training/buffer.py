@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from typing import Dict, List
 
+from banqi_training.config import validate_value_target
 from banqi_training.constants import build_constants
 from banqi_training.variant import Variant
 
@@ -70,21 +71,13 @@ class DataBuffer:
         self.capacity = max(int(capacity), 1)
         self.variant = variant
         self.cfg = cfg
-        # value 目标模式白名单：拼写错误会静默退化为 mcts，实验结论随之失真
-        modes = {"mcts", "game", "completed_q", "mixed", "anneal", "game_hp"}
-        if cfg.VALUE_TARGET_MODE not in modes:
-            raise ValueError(
-                f"未知 VALUE_TARGET_MODE={cfg.VALUE_TARGET_MODE!r}，可选 {sorted(modes)}"
-            )
-        # 策略目标变换参数校验：T<=0 会让 p^(1/T) 产出 inf/NaN，ε 越界破坏概率语义
-        if float(cfg.POLICY_TARGET_TEMPERATURE) <= 0.0:
-            raise ValueError(
-                f"POLICY_TARGET_TEMPERATURE 必须 > 0（1.0 = 恒等）: {cfg.POLICY_TARGET_TEMPERATURE}"
-            )
-        if not 0.0 <= float(cfg.POLICY_TARGET_ACTION_MIX) <= 1.0:
-            raise ValueError(
-                f"POLICY_TARGET_ACTION_MIX 必须在 [0,1]（0.0 = 恒等）: {cfg.POLICY_TARGET_ACTION_MIX}"
-            )
+        # value / policy 目标取值域校验：与运行时热更（config.apply_overrides）共用
+        # 同一套判据，保证远程改完的取值域与启动时一致
+        validate_value_target(
+            mode=cfg.VALUE_TARGET_MODE,
+            temperature=cfg.POLICY_TARGET_TEMPERATURE,
+            action_mix=cfg.POLICY_TARGET_ACTION_MIX,
+        )
         self.C = build_constants(variant)
         self.capacity = max(self.capacity, self.C.TRAIN_BATCH
                             if hasattr(self.C, "TRAIN_BATCH") else 32)
