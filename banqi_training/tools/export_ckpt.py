@@ -50,15 +50,18 @@ def export_checkpoint_file(ckpt_path: str, variant_id: str | None = None) -> boo
 
     # 由权重 key / 形状检测结构开关，保证与 checkpoint 匹配：
     #   - 血量差异头：存在 health_* 权重；
-    #   - 分布化价值头：value_fc2 输出维度 > 1（标量价值头为 1）。
+    #   - 分布化价值头：value_fc2 输出维度 > 1（标量价值头为 1）；
+    #   - 解耦策略塔：存在 p_conv_input（策略分支自己的输入卷积）。
     enable_health = any(k.startswith("health_") for k in state_dict)
     value_out_dim = int(state_dict["value_fc2.weight"].shape[0])
     enable_value_dist = value_out_dim > 1
+    independent_policy_trunk = "p_conv_input.weight" in state_dict
     model = BanqiNet(
         variant,
         enable_health=enable_health,
         enable_value_dist=enable_value_dist,
         value_dist_bins=value_out_dim if enable_value_dist else 65,
+        independent_policy_trunk=independent_policy_trunk,
     )
     model.load_state_dict(state_dict)
     model.eval()

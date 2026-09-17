@@ -132,8 +132,10 @@ common:
 
   # ---------------- 价值目标与漂移评估 ----------------
   value_target:
-    VALUE_TARGET_MODE: "game_hp"     # 价值目标模式（mcts/game/completed_q/mixed/anneal/game_hp；mcts->game：向终局胜负真值学习）
-                                  # game_hp：胜负用终局真值、平局改用终局子力差（4x2 平局占比过半，原目标恒为 0）
+    VALUE_TARGET_MODE: "game"        # 价值目标模式（game/completed_q/mixed/anneal/game_hp；mcts->game：向终局胜负真值学习）
+                                  # game_hp：胜负用终局真值、平局改用终局子力差。4x2 和局子力差确有信息
+                                  #   （非零率 88%，std 0.255），但离线实测对 auc/top1 无收益（0.9204 vs 0.9210），
+                                  #   默认维持 game（见 20260914-后续探索方向.md B6 / 分布化结论）
                                   # completed_q：用所选动作的 Q(s,a)（与根 V 同量纲同视角，短搜索下偏差更小）
     VALUE_MIX_GAME_WEIGHT: 0.5    # mixed 模式的终局价值权重 λ：target=(1-λ)*mcts_value+λ*game_result
     VALUE_TARGET_ANNEAL_ROUNDS: 0 # value 目标退火总轮数（0=关闭）
@@ -156,6 +158,13 @@ common:
   policy_target:
     POLICY_TARGET_TEMPERATURE: 1.0   # p' ∝ p^(1/T)，T<1 更尖；1.0 = 恒等（必须 > 0）
     POLICY_TARGET_ACTION_MIX: 0.0    # 与搜索动作 one-hot 混合比 ε∈[0,1]；0.0 = 恒等
+
+  # ---------------- 策略分支解耦（B3 方案 1，可选；默认共享塔） ----------------
+  # 策略分支使用自己的输入卷积 + 残差塔，与 value 分支互不施加梯度（消除梯度竞争）。
+  # 动机：B1/B2/B4 依次证伪后，纯策略 89.2% 与「+MCTS 95%」的差距只剩容量/表示可解释。
+  # 代价：4x2 参数量 55,545 → 95,609（+72%），训练耗时 +60%；开启后与旧 checkpoint 不兼容（缺键报错）。
+  policy_trunk:
+    POLICY_TRUNK_INDEPENDENT: false  # true = 策略分支独立 trunk
 
   # ---------------- 血量差异价值头（离散分类，可选；**默认关闭，A/B 实测无收益**） ----------------
   # 实测结论（2026-09-16，4x2 两臂各 400 轮闭环 A/B，训练量差 1.8%）：
@@ -327,7 +336,7 @@ common:
 4x2:
   self_play:
     PREDICT_BATCH: 64
-    MCTS_SIMS: 256
+    MCTS_SIMS: 512                # 自对弈基线（A3：256→512 +2 点量级；512→2048 无 headroom 见 B4）
     MAX_CONSIDERED_ACTIONS: 16
     NUM_WORKERS: 1
     GAMES_PER_WORKER: 2
@@ -359,11 +368,7 @@ common:
     DB_NAME: "banqi_mini"
     ARCHIVE_ENABLED: false
 
-  health_head:
-    HEALTH_VALUE_HEAD_ENABLED: false   # 默认关闭：三变体网络语义统一为「策略 + 价值」两头，跨变体迁移/评测基线一致；需实验时显式开启
-    HEALTH_LOSS_WEIGHT: 0.25           # 血量头交叉熵 loss 权重 α
-    HEALTH_UTILITY_WEIGHT: 0.15        # MCTS 复合效用中血量期望权重 λ
-    HEALTH_UTILITY_CONFIDENCE_EXP: 0.0 # λ 自适应指数；0=常量 λ
+  # health_head 已统一到 common（三变体 false，4x2 不再覆盖，见 B6 落地状态）
 
   runtime:
     MAX_RUNTIME_SECONDS: 0

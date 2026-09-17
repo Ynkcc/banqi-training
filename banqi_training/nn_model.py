@@ -61,6 +61,7 @@ class BanqiNet(nn.Module):
         enable_health: bool = False,
         enable_value_dist: bool = False,
         value_dist_bins: int = 65,
+        independent_policy_trunk: bool = False,
     ) -> None:
         super().__init__()
         self.variant_id = variant.id
@@ -71,6 +72,10 @@ class BanqiNet(nn.Module):
                 f"VALUE_DIST_BINS 必须为 ≥3 的奇数（保证存在 0 中心桶）: {value_dist_bins}"
             )
         self.value_dist_bins = int(value_dist_bins)
+        # B3 方案 1：策略分支独立 trunk（自己的输入卷积 + 残差塔）。
+        # 动机：value/health 的梯度与 policy 在共享塔上竞争，策略头容量可能被挤占。
+        # 独立后两分支互不施加梯度；代价是参数量约 +40k（4x2, hidden=32）。
+        self.independent_policy_trunk = bool(independent_policy_trunk)
         c: Constants = build_constants(variant)
         hidden = c.HIDDEN_CHANNELS
         rows, cols = c.BOARD_ROWS, c.BOARD_COLS
@@ -86,6 +91,16 @@ class BanqiNet(nn.Module):
         self.res_tower = nn.ModuleList(
             [BasicBlock(hidden) for _ in range(c.NUM_RES_BLOCKS)]
         )
+
+        # 2b. 策略分支独立 trunk（independent_policy_trunk 时启用）
+        if self.independent_policy_trunk:
+            self.p_conv_input = nn.Conv2d(
+                c.TOTAL_INPUT_CHANNELS, hidden, kernel_size=3, padding=1, bias=False
+            )
+            self.p_bn_input = nn.BatchNorm2d(hidden)
+            self.p_res_tower = nn.ModuleList(
+                [BasicBlock(hidden) for _ in range(c.NUM_RES_BLOCKS)]
+            )
 
         # 3. 策略头
         self.policy_channels = c.POLICY_HEAD_CHANNELS
@@ -147,8 +162,16 @@ class BanqiNet(nn.Module):
         for block in self.res_tower:
             x = block(x)
 
-        # 策略头
-        p = self.policy_conv(x)
+        # 策略头（解耦时走自己的 trunk，否则复用共享塔输出 x）
+        if self.independent_policy_trunk:
+            px = self.p_conv_input(board)
+            px = self.p_bn_input(px)
+            px = F.relu(px)
+            for block in self.p_res_tower:
+                px = block(px)
+        else:
+            px = x
+        p = self.policy_conv(px)
         p = self.policy_bn(p)
         p = F.relu(p)
         p = p.view(p.size(0), -1)

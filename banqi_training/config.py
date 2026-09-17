@@ -421,6 +421,11 @@ class Config:
     # 但上限受「目标本已很尖」限制。两者都必须经闭环胜率验证，不能只看离线 top-1。
     POLICY_TARGET_TEMPERATURE: float = 1.0  # 温度锐化 p' ∝ p^(1/T)，T<1 更尖；1.0 = 恒等
     POLICY_TARGET_ACTION_MIX: float = 0.0   # 与搜索动作 one-hot 的混合比 ε∈[0,1]；0 = 恒等
+    # ============ 策略分支解耦（B3 方案 1，可选；默认共享） ============
+    # 策略分支使用自己的输入卷积 + 残差塔，与 value 分支互不施加梯度。
+    # 动机：B1/B2/B4 依次证伪后，纯策略 89.2% 与「+MCTS 95%」的差距只剩容量/表示可解释。
+    # 代价：4x2 参数量约 +40k（65k → ~105k）。开启后与旧 checkpoint 不兼容（缺键报错）。
+    POLICY_TRUNK_INDEPENDENT: bool = False
     # ============ 采样与增强节流（可选，带默认值向后兼容） ============
     DATA_AUGMENT_K: int = 1                # 每局随机抽取的对称变换个数（1=原行为；上限=变体非恒等变换数）
     MIN_NEW_SAMPLES_TO_TRAIN: int = 0      # 触发一次训练所需累计新样本数；0=自动 max(TRAIN_BATCH*EPOCHS, MAX_SAMPLE_BUFFER_SIZE//4)

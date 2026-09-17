@@ -37,6 +37,7 @@ def _model_flags(model) -> dict:
         "enable_health": bool(getattr(model, "enable_health", False)),
         "enable_value_dist": bool(getattr(model, "enable_value_dist", False)),
         "value_dist_bins": int(getattr(model, "value_dist_bins", 65)),
+        "independent_policy_trunk": bool(getattr(model, "independent_policy_trunk", False)),
     }
 
 

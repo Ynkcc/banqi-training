@@ -74,6 +74,8 @@ class TrainWorker(threading.Thread):
         # 同样使用独立 _vdist 模型文件，避免与标准/血量头臂互相 resume。
         self.value_dist_enabled = bool(cfg.VALUE_DIST_ENABLED)
         self.value_dist_bins = int(cfg.VALUE_DIST_BINS)
+        # 策略分支解耦（B3 方案 1）：开启时策略分支走独立 trunk
+        self.policy_trunk_independent = bool(cfg.POLICY_TRUNK_INDEPENDENT)
         # 空间对称增强（纯 Python，动作置换表带缓存）
         self.augmenter = EpisodeAugmenter(variant, cfg)
         # 局面重搜位置池（reanalysis）：位置来自 episode 的快照侧信道（collector 采集）。
@@ -138,6 +140,7 @@ class TrainWorker(threading.Thread):
             enable_health=self.health_enabled,
             enable_value_dist=self.value_dist_enabled,
             value_dist_bins=self.value_dist_bins,
+            independent_policy_trunk=self.policy_trunk_independent,
         )
 
     def _init_model_and_checkpoint(self):
