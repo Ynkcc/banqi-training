@@ -13,7 +13,8 @@ dependencies = [
     "numpy",
     "pyyaml",
     "grpcio",
-    "protobuf",
+    # pb2 由 protobuf 6.31 gencode 生成；runtime 主版本必须与 gencode 一致
+    "protobuf>=6.31",
     "psutil",
     "tensorboard",
     "nvidia-ml-py",
