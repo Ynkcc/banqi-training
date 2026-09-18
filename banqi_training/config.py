@@ -10,13 +10,12 @@
 合并后每个变体都必须覆盖全部字段，否则报错。
 
 配置来源（优先级从低到高）：
-  1. 本地配置文件 config.local.yaml（也可用环境变量 BANQI_CONFIG 指定
-     其他 YAML 文件）。该文件为必需：缺失时 make_config 直接报错，
-     请先运行 `python -m banqi_training.config --write-template` 生成。
+  1. 本地配置文件 config.local.yaml 或 BANQI_CONFIG 指定的文件。
+     均缺失时回退读取打包的 config.default.yaml 作为基础配置（仅打印提示，
+     不报错），Kaggle 等临时环境可只靠环境变量覆盖设备/路径等本地项。
   2. 环境变量（最高优先）
 
-config.default.yaml 仅是生成 config.local.yaml 的模板（--write-template），
-运行时不会读取，也不作为任何兜底。
+config.default.yaml 既是 --write-template 的模板，也是上述回退的基础配置。
 
 环境变量覆盖规则（统一）：所有字段一律以「无前缀字段名」读取，名称直接
 对应 Config 字段（如 LEARNING_RATE、DATA_AUGMENT_ENABLED、MONGO_URI…）。
@@ -182,14 +181,22 @@ def _get_config_data() -> Dict[str, Dict[str, Any]]:
     global _config_data, _config_path
     if _config_data is not None:
         return _config_data
-    path = os.environ.get("BANQI_CONFIG", "").strip() or _LOCAL_YAML
+    env_path = os.environ.get("BANQI_CONFIG", "").strip()
+    path = env_path or _LOCAL_YAML
     raw_data = _load_yaml(path)
+    if raw_data is None and not env_path:
+        # 本地配置缺失：回退读取打包的 config.default.yaml 作为基础配置
+        # （字段完整；目标机差异项一律靠环境变量覆盖）。显式指定 BANQI_CONFIG
+        # 却不存在则维持报错，不做静默兜底。
+        print(
+            f"[banqi_training.config] 未找到 {path}，"
+            f"回退使用打包的基础配置 {_DEFAULT_YAML}（目标机差异项请用环境变量覆盖）"
+        )
+        path = _DEFAULT_YAML
+        raw_data = _load_yaml(path)
     if raw_data is None:
         raise RuntimeError(
-            f"[banqi_training.config] 缺少配置文件: {path}\n"
-            f"  本地配置文件是必需的。请先运行:\n"
-            f"    python -m banqi_training.config --write-template\n"
-            f"  生成 config.local.yaml，再修改其中的参数。"
+            f"[banqi_training.config] 配置文件不存在: {path}"
         )
     known = set(Config.__dataclass_fields__) - {"variant_id"}
     # 带默认值的字段（新增可选模块，如 NNUE 蒸馏）不在本地配置文件中时按默认值兜底
