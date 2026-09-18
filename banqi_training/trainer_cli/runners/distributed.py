@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ from banqi_training.infra import (
     ModelRegistry,
     SchedulerEpisodeStore,
     SchedulerModelRegistry,
+    scheduler_heartbeat,
     scheduler_should_stop,
     scheduler_train_config,
 )
@@ -72,6 +74,10 @@ def run_distributed(variant_id: str) -> None:
     config._variant = variant
     tag = f"[{variant.id}][distributed]"
     trainer_id = os.environ.get("TRAINER_ID", "")
+    # WebUI 在线登记：复用 collector 的 Heartbeat RPC（调度器侧仅 upsert 登记，
+    # GetTask 分发不看 workers 表，trainer 不会领到自对弈任务）。间隔取
+    # SHOULD_STOP_POLL_SECONDS 同源节奏的 20s 固定值，远小于调度器在线窗口。
+    heartbeat_id = f"trainer-{trainer_id or socket.gethostname()}"
 
     # 调度层训练配置 bootstrap：必须在 TrainWorker 构造之前套用——结构校验、
     # DataBuffer 的值目标校验、lr_decay_batches 都是构造期一次性快照，晚了不生效。
@@ -151,6 +157,9 @@ def run_distributed(variant_id: str) -> None:
         )
     else:
         print(f"{tag} ⚠️ SHOULD_STOP_POLL_SECONDS=0：停机与训练配置热更轮询均已关闭")
+    # 心跳在线状态沿：只在 掉线/恢复 的边沿打印，避免每 20s 刷屏
+    hb_alive: Optional[bool] = None
+    next_heartbeat = 0.0
     try:
         while not thread_stop.is_set():
             if config.MAX_RUNTIME_SECONDS > 0 and \
@@ -158,6 +167,15 @@ def run_distributed(variant_id: str) -> None:
                 print(f"{tag} 达到运行时限 {config.MAX_RUNTIME_SECONDS}s，优雅停止...")
                 thread_stop.set()
                 break
+            if time.time() >= next_heartbeat:
+                next_heartbeat = time.time() + 20.0
+                alive = scheduler_heartbeat(heartbeat_id, registry.endpoint)
+                if alive != hb_alive:
+                    if alive:
+                        print(f"{tag} 💓 调度器心跳已恢复（WebUI 登记: {heartbeat_id}）")
+                    else:
+                        print(f"{tag} ⚠️ 调度器心跳失败（WebUI 将显示离线，训练不受影响）")
+                    hb_alive = alive
             if time.time() >= next_stop_poll:
                 next_stop_poll = time.time() + stop_poll
                 should_stop, reason = scheduler_should_stop(registry.endpoint)

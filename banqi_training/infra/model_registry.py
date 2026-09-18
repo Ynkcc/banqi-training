@@ -10,8 +10,13 @@ import os
 from typing import Optional, Protocol
 
 
-def scheduler_variant(endpoint: Optional[str] = None) -> str:
-    """从调度器 GetInfo 获取变体 id（trainer 启动时无需命令行传入变体）。"""
+def scheduler_variant(endpoint: Optional[str] = None, retry_interval: float = 10.0) -> str:
+    """从调度器 GetInfo 获取变体 id（trainer 启动时无需命令行传入变体）。
+
+    调度器不可达时持续重试（retry_interval 秒间隔），不使训练端启动失败。
+    """
+    import time
+
     import grpc
 
     from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
@@ -19,7 +24,13 @@ def scheduler_variant(endpoint: Optional[str] = None) -> str:
     endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
     target = endpoint.split("://", 1)[-1]
     stub = scheduler_pb2_grpc.SchedulerServiceStub(grpc.insecure_channel(target))
-    variant = stub.GetInfo(scheduler_pb2.GetInfoRequest()).variant
+    while True:
+        try:
+            variant = stub.GetInfo(scheduler_pb2.GetInfoRequest(), timeout=retry_interval).variant
+            break
+        except grpc.RpcError as exc:
+            print(f"[scheduler] ⚠️ GetInfo 失败（{retry_interval:.0f}s 后重试）: {exc}")
+            time.sleep(retry_interval)
     if not variant:
         raise ValueError(f"调度器未下发变体（GetInfo.variant 为空）: {endpoint}，请升级调度器并配置 SCHEDULER_VARIANT")
     return variant
@@ -47,6 +58,44 @@ def scheduler_should_stop(
         return bool(reply.should_stop), str(reply.stop_reason)
     except Exception as exc:  # noqa: BLE001 — 轮询失败按「不停止」处理
         return False, f"GetInfo 轮询失败: {exc}"
+    finally:
+        channel.close()
+
+
+def scheduler_heartbeat(
+    worker_id: str,
+    endpoint: Optional[str] = None,
+    timeout: float = 5.0,
+) -> bool:
+    """向调度器上报 Heartbeat，让 trainer 出现在 WebUI Worker 列表（在线窗口内）。
+
+    复用 collector 的 Heartbeat RPC：调度器侧 TouchWorker 仅 upsert 登记行，
+    GetTask 分发与 workers 表无关，trainer 心跳行不会领到自对弈任务。
+    trainer 不产 episode，completed_games 恒为 0；threads / memory_mb 供展示。
+    返回是否成功；失败由调用方决定是否告警（心跳丢失不应中断训练）。
+    """
+    import grpc
+    import psutil
+
+    from banqi_training.proto import scheduler_pb2, scheduler_pb2_grpc
+
+    endpoint = endpoint or os.environ.get("SCHEDULER_ENDPOINT", "http://127.0.0.1:50051")
+    target = endpoint.split("://", 1)[-1]
+    channel = grpc.insecure_channel(target)
+    try:
+        stub = scheduler_pb2_grpc.SchedulerServiceStub(channel)
+        stub.Heartbeat(
+            scheduler_pb2.HeartbeatRequest(
+                worker_id=worker_id,
+                current_threads=os.cpu_count() or 0,
+                memory_mb=psutil.virtual_memory().available // (1 << 20),
+                client_version="banqi-training",
+            ),
+            timeout=timeout,
+        )
+        return True
+    except Exception:  # noqa: BLE001 — 心跳失败绝不中断训练
+        return False
     finally:
         channel.close()
 

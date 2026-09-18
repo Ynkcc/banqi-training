@@ -8,6 +8,7 @@ from .episode_store import EpisodeStore, SchedulerEpisodeStore
 from .model_registry import (
     ModelRegistry,
     SchedulerModelRegistry,
+    scheduler_heartbeat,
     scheduler_should_stop,
     scheduler_train_config,
     scheduler_variant,
@@ -18,6 +19,7 @@ __all__ = [
     "SchedulerEpisodeStore",
     "ModelRegistry",
     "SchedulerModelRegistry",
+    "scheduler_heartbeat",
     "scheduler_should_stop",
     "scheduler_train_config",
     "scheduler_variant",

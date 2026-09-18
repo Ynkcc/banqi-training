@@ -77,10 +77,12 @@ class SchedulerEpisodeStore:
     # ---- 读取端 ----
 
     def _list_page(self) -> None:
+        # timeout 必须显式设置：断线时无 timeout 的调用会永久挂起，训练循环被卡死
         reply = self._stub.ListEpisodes(
             self._pb2.ListEpisodesRequest(
                 after_key=self._cursor, limit=self.PAGE_LIMIT, kind=self.kind
-            )
+            ),
+            timeout=10.0,
         )
         for obj in reply.objects:
             self._pending.append((obj.object_key, obj.download_url))
